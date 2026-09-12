@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { getRol, cerrarSesion, ROLES } from '../lib/auth'
 
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
 const SOSPECHOSOS = [
   ['DARIO K', 'DARIO KARCHESKY'],
@@ -14,6 +15,9 @@ const SOSPECHOSOS = [
   ['SIRLEY WAGNER', 'SIRLEY WEGNER'],
   ['SOLANA', 'SOLANA BURKET'],
 ]
+
+const GENEROS = ['Femenino', 'Masculino', 'Prefiere no decir']
+const CANALES = ['Instagram', 'Referido', 'Pasó por el local', 'Google', 'Otro']
 
 function mesActualISO() {
   const d = new Date()
@@ -42,6 +46,9 @@ export default function Alumnos() {
   const [mesStats, setMesStats] = useState(mesActualISO())
   const [anotadosEnMes, setAnotadosEnMes] = useState(null)
   const [clasesPorAlumno, setClasesPorAlumno] = useState({})
+  const [anioResumen, setAnioResumen] = useState(new Date().getFullYear())
+  const [resumenMeses, setResumenMeses] = useState(Array(12).fill(0))
+  const [cargandoResumen, setCargandoResumen] = useState(true)
 
   useEffect(() => {
     const r = getRol()
@@ -86,6 +93,26 @@ export default function Alumnos() {
 
   useEffect(() => { if (rol) cargarAnotadosEnMes() }, [cargarAnotadosEnMes, rol])
 
+  const cargarResumenAnual = useCallback(async () => {
+    setCargandoResumen(true)
+    const inicio = `${anioResumen}-01-01`
+    const fin = `${anioResumen}-12-01`
+    const { data } = await supabase
+      .from('inscripciones').select('alumno_id, mes')
+      .eq('estado', 'activo')
+      .gte('mes', inicio).lte('mes', fin)
+
+    const porMes = Array.from({ length: 12 }, () => new Set())
+    ;(data || []).forEach(i => {
+      const m = parseInt(i.mes.slice(5, 7), 10) - 1
+      if (m >= 0 && m < 12) porMes[m].add(i.alumno_id)
+    })
+    setResumenMeses(porMes.map(s => s.size))
+    setCargandoResumen(false)
+  }, [anioResumen])
+
+  useEffect(() => { if (rol) cargarResumenAnual() }, [cargarResumenAnual, rol])
+
   function cambiarMesStats(delta) {
     const [y, m] = mesStats.split('-').map(Number)
     const fecha = new Date(y, m - 1 + delta, 1)
@@ -107,7 +134,10 @@ export default function Alumnos() {
     if (!editando) return
     await supabase.from('alumnos').update({
       nombre: editando.nombre,
-      exento_pago: editando.exento_pago
+      exento_pago: editando.exento_pago,
+      genero: editando.genero || null,
+      anio_nacimiento: editando.anio_nacimiento ? parseInt(editando.anio_nacimiento) : null,
+      canal_origen: editando.canal_origen || null
     }).eq('id', editando.id)
     setEditando(null)
     cargar()
@@ -168,6 +198,18 @@ export default function Alumnos() {
     router.push('/login')
   }
 
+  const maxResumen = Math.max(1, ...resumenMeses)
+
+  const conteoGenero = {}
+  const conteoCanal = {}
+  let conGenero = 0, conCanal = 0
+  alumnos.forEach(a => {
+    if (a.genero) { conteoGenero[a.genero] = (conteoGenero[a.genero] || 0) + 1; conGenero++ }
+    if (a.canal_origen) { conteoCanal[a.canal_origen] = (conteoCanal[a.canal_origen] || 0) + 1; conCanal++ }
+  })
+  const pctGenero = totalHistorico > 0 ? Math.round((conGenero / totalHistorico) * 100) : 0
+  const pctCanal = totalHistorico > 0 ? Math.round((conCanal / totalHistorico) * 100) : 0
+
   if (!rol) return null
 
   return (
@@ -206,6 +248,58 @@ export default function Alumnos() {
             <button onClick={() => cambiarMesStats(1)} className="w-5 h-5 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-xs">›</button>
           </div>
           <p className="text-[10px] text-[#8A8378] text-center mt-1">{labelMesStats}</p>
+        </div>
+      </div>
+
+      <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <p className="text-sm font-medium text-[#221F1B]">Alumnos anotados por mes</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setAnioResumen(a => a - 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">‹</button>
+            <span className="text-sm font-medium text-[#221F1B] w-14 text-center">{anioResumen}</span>
+            <button onClick={() => setAnioResumen(a => a + 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">›</button>
+          </div>
+        </div>
+        {cargandoResumen ? (
+          <p className="text-xs text-[#8A8378]">Cargando…</p>
+        ) : (
+          <div className="flex items-end gap-2 h-40">
+            {resumenMeses.map((cantidad, idx) => (
+              <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full">
+                <span className="text-[10px] text-[#8A8378] mb-1">{cantidad > 0 ? cantidad : ''}</span>
+                <div
+                  className="w-full rounded-t-md bg-[#5C6F5D]"
+                  style={{ height: `${Math.max(2, (cantidad / maxResumen) * 100)}%` }}
+                />
+                <span className="text-[10px] text-[#8A8378] mt-1">{MESES_CORTOS[idx]}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 pt-5 border-t border-[#221F1B]/8">
+          <div>
+            <p className="text-xs text-[#8A8378] mb-2">Género — {pctGenero}% completado ({conGenero} de {totalHistorico})</p>
+            <div className="flex flex-col gap-1">
+              {GENEROS.map(g => (
+                <div key={g} className="flex items-center justify-between text-sm">
+                  <span className="text-[#221F1B]">{g}</span>
+                  <span className="text-[#8A8378]">{conteoGenero[g] || 0}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-[#8A8378] mb-2">Canal de origen — {pctCanal}% completado ({conCanal} de {totalHistorico})</p>
+            <div className="flex flex-col gap-1">
+              {CANALES.map(c => (
+                <div key={c} className="flex items-center justify-between text-sm">
+                  <span className="text-[#221F1B]">{c}</span>
+                  <span className="text-[#8A8378]">{conteoCanal[c] || 0}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -313,14 +407,41 @@ export default function Alumnos() {
       )}
 
       {editando && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setEditando(null)}>
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setEditando(null)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-medium text-[#221F1B] mb-4">Editar alumno</p>
             <label className="block text-xs text-[#8A8378] mb-1">Nombre</label>
             <input value={editando.nombre} onChange={e => setEditando({ ...editando, nombre: e.target.value })} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
             <p className="text-xs text-[#8A8378] mb-4">
-              Estado: <span className="text-[#221F1B] font-medium">{idsActivosHoy.has(editando.id) ? 'Activo' : 'Baja'}</span> (se calcula solo desde la grilla de este mes — dalo de baja desde Días y Horarios o Cobranza, no acá)
+              Clases por semana: <span className="text-[#221F1B] font-medium">{clasesPorAlumno[editando.id] ?? 0}</span> (se calcula solo desde la grilla, no se edita acá)
             </p>
+
+            <label className="block text-xs text-[#8A8378] mb-1">Género (opcional)</label>
+            <div className="flex gap-2 mb-3 flex-wrap">
+              {GENEROS.map(g => (
+                <button key={g} onClick={() => setEditando({ ...editando, genero: editando.genero === g ? null : g })} className={`px-3 py-1.5 rounded-full text-xs border ${editando.genero === g ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
+                  {g}
+                </button>
+              ))}
+            </div>
+
+            <label className="block text-xs text-[#8A8378] mb-1">Año de nacimiento (opcional)</label>
+            <input
+              type="number"
+              placeholder="Ej: 1990"
+              value={editando.anio_nacimiento || ''}
+              onChange={e => setEditando({ ...editando, anio_nacimiento: e.target.value })}
+              className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]"
+            />
+
+            <label className="block text-xs text-[#8A8378] mb-1">¿Cómo nos conoció? (opcional)</label>
+            <div className="flex gap-2 mb-4 flex-wrap">
+              {CANALES.map(c => (
+                <button key={c} onClick={() => setEditando({ ...editando, canal_origen: editando.canal_origen === c ? null : c })} className={`px-3 py-1.5 rounded-full text-xs border ${editando.canal_origen === c ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
+                  {c}
+                </button>
+              ))}
+            </div>
 
             <div className="flex items-center justify-between bg-[#F5F1E9] rounded-lg px-3 py-2.5 mb-5">
               <div>
