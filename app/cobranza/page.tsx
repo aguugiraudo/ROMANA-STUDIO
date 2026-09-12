@@ -46,6 +46,7 @@ export default function Cobranza() {
   const [cuotasModal, setCuotasModal] = useState(false)
   const [cuotasEdit, setCuotasEdit] = useState({})
   const [filtro, setFiltro] = useState('todos')
+  const [busqueda, setBusqueda] = useState('')
   const [mensajeModal, setMensajeModal] = useState(null)
   const [cuentaMensajeId, setCuentaMensajeId] = useState(null)
   const [tipoMensaje, setTipoMensaje] = useState('recordatorio')
@@ -143,8 +144,9 @@ export default function Cobranza() {
   }))
 
   const alumnosFiltrados = alumnosDelMes.filter(a => {
-    if (filtro === 'todos') return true
-    return estadoDe(a) === filtro
+    if (filtro !== 'todos' && estadoDe(a) !== filtro) return false
+    if (busqueda.trim() && !a.nombre.toLowerCase().includes(busqueda.trim().toLowerCase())) return false
+    return true
   })
 
   function abrirPago(alumno) {
@@ -332,12 +334,20 @@ export default function Cobranza() {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {['todos', 'pagado', 'pendiente', 'vencido', 'exento'].map(f => (
-          <button key={f} onClick={() => setFiltro(f)} className={`px-4 py-1.5 rounded-full text-sm border ${filtro === f ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
-            {f === 'todos' ? `Todos (${alumnosDelMes.length})` : `${labelEstado[f]}s (${contadorFiltro[f] || 0})`}
-          </button>
-        ))}
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex gap-2 flex-wrap">
+          {['todos', 'pagado', 'pendiente', 'vencido', 'exento'].map(f => (
+            <button key={f} onClick={() => setFiltro(f)} className={`px-4 py-1.5 rounded-full text-sm border ${filtro === f ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
+              {f === 'todos' ? `Todos (${alumnosDelMes.length})` : `${labelEstado[f]}s (${contadorFiltro[f] || 0})`}
+            </button>
+          ))}
+        </div>
+        <input
+          value={busqueda}
+          onChange={e => setBusqueda(e.target.value)}
+          placeholder="Buscar alumno…"
+          className="border border-[#221F1B]/15 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#5C6F5D] bg-white w-full sm:w-56"
+        />
       </div>
 
       {cargando ? (
