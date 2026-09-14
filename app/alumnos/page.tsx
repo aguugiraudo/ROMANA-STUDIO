@@ -6,6 +6,7 @@ import { getRol, cerrarSesion, ROLES } from '../lib/auth'
 
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+const ALTURA_MAX_BARRA = 140
 
 const SOSPECHOSOS = [
   ['DARIO K', 'DARIO KARCHESKY'],
@@ -278,17 +279,20 @@ export default function Alumnos() {
         {cargandoResumen ? (
           <p className="text-xs text-[#8A8378]">Cargando…</p>
         ) : (
-          <div className="flex items-end gap-2 h-40">
-            {resumenMeses.map((cantidad, idx) => (
-              <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full">
-                <span className="text-[10px] text-[#8A8378] mb-1">{cantidad > 0 ? cantidad : ''}</span>
-                <div
-                  className="w-full rounded-t-md bg-[#5C6F5D]"
-                  style={{ height: `${Math.max(2, (cantidad / maxResumen) * 100)}%` }}
-                />
-                <span className="text-[10px] text-[#8A8378] mt-1">{MESES_CORTOS[idx]}</span>
-              </div>
-            ))}
+          <div className="flex items-end gap-2">
+            {resumenMeses.map((cantidad, idx) => {
+              const alturaBarra = cantidad > 0 ? Math.max(4, (cantidad / maxResumen) * ALTURA_MAX_BARRA) : 2
+              return (
+                <div key={idx} className="flex-1 flex flex-col items-center justify-end">
+                  <span className="text-[10px] text-[#8A8378] mb-1">{cantidad > 0 ? cantidad : ''}</span>
+                  <div
+                    className="w-full rounded-t-md bg-[#5C6F5D]"
+                    style={{ height: `${alturaBarra}px` }}
+                  />
+                  <span className="text-[10px] text-[#8A8378] mt-1">{MESES_CORTOS[idx]}</span>
+                </div>
+              )
+            })}
           </div>
         )}
 
