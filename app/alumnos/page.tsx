@@ -24,6 +24,24 @@ function mesActualISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
 }
 
+async function fetchTodasInscripciones(inicio, fin) {
+  let todas = []
+  let desde = 0
+  const tam = 1000
+  while (true) {
+    const { data } = await supabase
+      .from('inscripciones').select('alumno_id, mes')
+      .eq('estado', 'activo')
+      .gte('mes', inicio).lte('mes', fin)
+      .range(desde, desde + tam - 1)
+    if (!data || data.length === 0) break
+    todas = todas.concat(data)
+    if (data.length < tam) break
+    desde += tam
+  }
+  return todas
+}
+
 export default function Alumnos() {
   const router = useRouter()
   const [rol, setRolState] = useState(null)
@@ -97,13 +115,10 @@ export default function Alumnos() {
     setCargandoResumen(true)
     const inicio = `${anioResumen}-01-01`
     const fin = `${anioResumen}-12-01`
-    const { data } = await supabase
-      .from('inscripciones').select('alumno_id, mes')
-      .eq('estado', 'activo')
-      .gte('mes', inicio).lte('mes', fin)
+    const data = await fetchTodasInscripciones(inicio, fin)
 
     const porMes = Array.from({ length: 12 }, () => new Set())
-    ;(data || []).forEach(i => {
+    data.forEach(i => {
       const m = parseInt(i.mes.slice(5, 7), 10) - 1
       if (m >= 0 && m < 12) porMes[m].add(i.alumno_id)
     })
