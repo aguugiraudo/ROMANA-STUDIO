@@ -6,6 +6,11 @@ import { getRol, cerrarSesion, ROLES } from '../lib/auth'
 
 const RESPONSABLES = ['Agustín', 'Iara', 'Ambos']
 
+function hoyISO() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export default function Proyectos() {
   const router = useRouter()
   const [rol, setRolState] = useState(null)
@@ -22,6 +27,7 @@ export default function Proyectos() {
   const [fechaAccionForm, setFechaAccionForm] = useState('')
   const [confirmarBorrarProyecto, setConfirmarBorrarProyecto] = useState(null)
   const [confirmarBorrarAccion, setConfirmarBorrarAccion] = useState(null)
+  const [proximasAbierto, setProximasAbierto] = useState(false)
 
   useEffect(() => {
     const r = getRol()
@@ -42,6 +48,7 @@ export default function Proyectos() {
   useEffect(() => { if (rol) cargar() }, [cargar, rol])
 
   function accionesDe(proyectoId) { return acciones.filter(a => a.proyecto_id === proyectoId) }
+  function proyectoDe(proyectoId) { return proyectos.find(p => p.id === proyectoId) }
 
   async function recalcularArchivado(proyectoId) {
     const lista = accionesDe(proyectoId)
@@ -111,12 +118,26 @@ export default function Proyectos() {
     setExpandido(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
+  function irAProyectoDesdeProximas(accion) {
+    setProximasAbierto(false)
+    setVista('activos')
+    setExpandido(prev => ({ ...prev, [accion.proyecto_id]: true }))
+  }
+
   function salir() {
     cerrarSesion()
     router.push('/login')
   }
 
   const proyectosFiltrados = proyectos.filter(p => vista === 'activos' ? !p.archivado : p.archivado)
+
+  const proximasAcciones = acciones
+    .filter(a => !a.hecho && a.fecha)
+    .filter(a => {
+      const p = proyectoDe(a.proyecto_id)
+      return p && !p.archivado
+    })
+    .sort((a, b) => a.fecha.localeCompare(b.fecha))
 
   if (!rol) return null
 
@@ -140,9 +161,14 @@ export default function Proyectos() {
 
       <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
         <p className="text-xs text-[#8A8378] uppercase tracking-widest">Proyectos</p>
-        <button onClick={() => setNuevoProyectoModal(true)} className="text-sm px-4 py-2 rounded-full bg-[#5C6F5D] text-white hover:bg-[#4C5C4D]">
-          + Nuevo proyecto
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setProximasAbierto(true)} className="text-sm px-4 py-2 rounded-full bg-white border border-[#221F1B]/10 text-[#221F1B] hover:border-[#5C6F5D] hover:text-[#5C6F5D] flex items-center gap-2">
+            <span>📅</span> Próximas acciones
+          </button>
+          <button onClick={() => setNuevoProyectoModal(true)} className="text-sm px-4 py-2 rounded-full bg-[#5C6F5D] text-white hover:bg-[#4C5C4D]">
+            + Nuevo proyecto
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 mb-6 mt-4">
@@ -300,6 +326,42 @@ export default function Proyectos() {
             <div className="flex gap-3 justify-center">
               <button onClick={() => setConfirmarBorrarAccion(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
               <button onClick={borrarAccion} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#B5504A] hover:bg-[#9C4340]">Borrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {proximasAbierto && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setProximasAbierto(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">Próximas acciones</p>
+            <p className="text-xs text-[#8A8378] mb-4">Todo lo que tiene fecha y todavía no está hecho, de más urgente a menos</p>
+            <div className="max-h-96 overflow-y-auto flex flex-col gap-2">
+              {proximasAcciones.length === 0 && (
+                <p className="text-sm text-[#8A8378]">No hay acciones con fecha pendientes.</p>
+              )}
+              {proximasAcciones.map(a => {
+                const vencida = a.fecha < hoyISO()
+                const proyecto = proyectoDe(a.proyecto_id)
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => irAProyectoDesdeProximas(a)}
+                    className={`text-left rounded-lg px-3 py-2.5 border ${vencida ? 'bg-[#FBEAE8] border-[#B5504A]/20' : 'bg-[#F5F1E9] border-transparent'} hover:border-[#5C6F5D]`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm text-[#221F1B]">{a.titulo}</p>
+                      <span className={`text-xs font-medium whitespace-nowrap ${vencida ? 'text-[#B5504A]' : 'text-[#8A8378]'}`}>{a.fecha}</span>
+                    </div>
+                    <p className="text-xs text-[#8A8378] mt-0.5">
+                      {proyecto?.titulo} {a.responsable ? `· ${a.responsable}` : ''}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setProximasAbierto(false)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cerrar</button>
             </div>
           </div>
         </div>
