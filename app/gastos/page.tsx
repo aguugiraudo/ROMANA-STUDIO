@@ -11,6 +11,12 @@ function mesActualISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
 }
 
+function mesAnterior(mes) {
+  const [y, m] = mes.split('-').map(Number)
+  const fecha = new Date(y, m - 2, 1)
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-01`
+}
+
 function hoyISO() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -18,12 +24,18 @@ function hoyISO() {
 
 function esSueldo(g) { return (g.concepto || '').startsWith('Sueldo ') }
 
+function horasDeConcepto(concepto) {
+  const m = (concepto || '').match(/\(([\d.]+)hs\)/)
+  return m ? m[1] : ''
+}
+
 export default function Gastos() {
   const router = useRouter()
   const [rol, setRolState] = useState(null)
   const [mes, setMes] = useState(mesActualISO())
   const [cargando, setCargando] = useState(true)
   const [gastos, setGastos] = useState([])
+  const [gastosMesAnterior, setGastosMesAnterior] = useState([])
   const [profes, setProfes] = useState([])
   const [cuentas, setCuentas] = useState([])
   const [modal, setModal] = useState(null)
@@ -32,8 +44,10 @@ export default function Gastos() {
   const [conceptoForm, setConceptoForm] = useState('')
   const [categoriaForm, setCategoriaForm] = useState('Variable')
   const [montoForm, setMontoForm] = useState('')
+  const [montoPlaceholder, setMontoPlaceholder] = useState('')
   const [profeIdForm, setProfeIdForm] = useState('')
   const [horasForm, setHorasForm] = useState('')
+  const [horasPlaceholder, setHorasPlaceholder] = useState('')
   const [tarifaForm, setTarifaForm] = useState('')
   const [formaPagoForm, setFormaPagoForm] = useState('Efectivo')
   const [cuentaIdForm, setCuentaIdForm] = useState(null)
@@ -42,6 +56,8 @@ export default function Gastos() {
   const [mostrandoNuevoProfe, setMostrandoNuevoProfe] = useState(false)
   const [confirmarBorrar, setConfirmarBorrar] = useState(null)
   const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [ordenPor, setOrdenPor] = useState('fecha')
+  const [ordenAsc, setOrdenAsc] = useState(false)
 
   useEffect(() => {
     const r = getRol()
@@ -61,6 +77,15 @@ export default function Gastos() {
       .gte('fecha', mes).lt('fecha', finMesISO)
       .order('fecha', { ascending: false })
     setGastos(g || [])
+
+    const mesPrevio = mesAnterior(mes)
+    const [yp, mp] = mesPrevio.split('-').map(Number)
+    const finMesPrevio = new Date(yp, mp, 1)
+    const finMesPrevioISO = `${finMesPrevio.getFullYear()}-${String(finMesPrevio.getMonth() + 1).padStart(2, '0')}-01`
+    const { data: gPrevio } = await supabase
+      .from('gastos').select('*')
+      .gte('fecha', mesPrevio).lt('fecha', finMesPrevioISO)
+    setGastosMesAnterior(gPrevio || [])
 
     const { data: p } = await supabase.from('profes').select('*').order('nombre')
     setProfes(p || [])
@@ -96,10 +121,56 @@ export default function Gastos() {
     total: pagados.filter(g => g.forma_pago === 'Transferencia' && g.cuenta_id === ct.id).reduce((acc, g) => acc + Number(g.monto), 0)
   }))
 
+  // ---- Sugeridos: fijos y sueldos del mes anterior que todavía no están este mes ----
+  const conceptosFijosEsteMes = new Set(gastos.filter(g => g.categoria === 'Fijo' && !esSueldo(g)).map(g => g.concepto))
+  const sugeridosFijos = []
+  const vistosFijos = new Set()
+  gastosMesAnterior.filter(g => g.categoria === 'Fijo' && !esSueldo(g)).forEach(g => {
+    if (vistosFijos.has(g.concepto) || conceptosFijosEsteMes.has(g.concepto)) return
+    vistosFijos.add(g.concepto)
+    sugeridosFijos.push({ concepto: g.concepto, monto: g.monto })
+  })
+
+  const profesEsteMes = new Set(gastos.filter(g => esSueldo(g)).map(g => g.pagado_por))
+  const sugeridosSueldos = []
+  const vistosProfes = new Set()
+  gastosMesAnterior.filter(g => esSueldo(g)).forEach(g => {
+    if (vistosProfes.has(g.pagado_por) || profesEsteMes.has(g.pagado_por)) return
+    vistosProfes.add(g.pagado_por)
+    const profe = profes.find(p => p.nombre === g.pagado_por)
+    sugeridosSueldos.push({ profeNombre: g.pagado_por, profeId: profe?.id || null, horas: horasDeConcepto(g.concepto) })
+  })
+
+  const hayaSugeridos = sugeridosFijos.length > 0 || sugeridosSueldos.length > 0
+
   const gastosFiltrados = gastos.filter(g => {
     if (filtroEstado === 'todos') return true
     return g.estado === filtroEstado
   })
+
+  function compararGastos(a, b) {
+    let va, vb
+    if (ordenPor === 'fecha') { va = a.fecha; vb = b.fecha }
+    else if (ordenPor === 'concepto') { va = a.concepto.toLowerCase(); vb = b.concepto.toLowerCase() }
+    else if (ordenPor === 'categoria') { va = esSueldo(a) ? 'Sueldo' : a.categoria; vb = esSueldo(b) ? 'Sueldo' : b.categoria }
+    else if (ordenPor === 'estado') { va = a.estado; vb = b.estado }
+    else if (ordenPor === 'monto') { va = Number(a.monto); vb = Number(b.monto) }
+    else { va = a.fecha; vb = b.fecha }
+    if (va < vb) return ordenAsc ? -1 : 1
+    if (va > vb) return ordenAsc ? 1 : -1
+    return 0
+  }
+  const gastosOrdenados = [...gastosFiltrados].sort(compararGastos)
+
+  function toggleOrden(campo) {
+    if (ordenPor === campo) setOrdenAsc(!ordenAsc)
+    else { setOrdenPor(campo); setOrdenAsc(campo === 'fecha' ? false : true) }
+  }
+
+  function flechaOrden(campo) {
+    if (ordenPor !== campo) return ''
+    return ordenAsc ? ' ▲' : ' ▼'
+  }
 
   function abrirNuevo() {
     setModal({})
@@ -108,8 +179,10 @@ export default function Gastos() {
     setConceptoForm('')
     setCategoriaForm('Variable')
     setMontoForm('')
+    setMontoPlaceholder('')
     setProfeIdForm(profes[0]?.id || '')
     setHorasForm('')
+    setHorasPlaceholder('')
     setTarifaForm(profes[0]?.tarifa_hora ? String(profes[0].tarifa_hora) : '')
     setFormaPagoForm('Efectivo')
     setCuentaIdForm(null)
@@ -124,9 +197,44 @@ export default function Gastos() {
     setConceptoForm(g.concepto)
     setCategoriaForm(g.categoria)
     setMontoForm(String(g.monto))
+    setMontoPlaceholder('')
+    setHorasPlaceholder('')
     setFormaPagoForm(g.forma_pago || 'Efectivo')
     setCuentaIdForm(g.cuenta_id || null)
     setEstadoForm(g.estado || 'Pagado')
+    setMostrandoNuevoProfe(false)
+  }
+
+  function abrirSugeridoFijo(sugerido) {
+    setModal({})
+    setModo('simple')
+    setFechaForm(hoyISO())
+    setConceptoForm(sugerido.concepto)
+    setCategoriaForm('Fijo')
+    setMontoForm('')
+    setMontoPlaceholder(`Ej: $${Number(sugerido.monto).toLocaleString('es-AR')}`)
+    setFormaPagoForm('Efectivo')
+    setCuentaIdForm(null)
+    setEstadoForm('Pagado')
+  }
+
+  function abrirSugeridoSueldo(sugerido) {
+    setModal({})
+    setModo('sueldo')
+    setFechaForm(hoyISO())
+    if (sugerido.profeId) {
+      setProfeIdForm(sugerido.profeId)
+      const p = profes.find(x => x.id === sugerido.profeId)
+      setTarifaForm(p ? String(p.tarifa_hora) : '')
+    } else {
+      setProfeIdForm(profes[0]?.id || '')
+      setTarifaForm(profes[0]?.tarifa_hora ? String(profes[0].tarifa_hora) : '')
+    }
+    setHorasForm('')
+    setHorasPlaceholder(sugerido.horas ? `Ej: ${sugerido.horas}` : '')
+    setFormaPagoForm('Efectivo')
+    setCuentaIdForm(null)
+    setEstadoForm('Pagado')
     setMostrandoNuevoProfe(false)
   }
 
@@ -222,6 +330,7 @@ export default function Gastos() {
           <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
           <a href="/alumnos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Alumnos</a>
           <a href="/dashboard" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Dashboard</a>
+          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
           <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
         </nav>
       </div>
@@ -238,6 +347,32 @@ export default function Gastos() {
       </div>
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-6">Gastos</p>
+
+      {!cargando && hayaSugeridos && (
+        <div className="bg-[#FBF4E4] border border-[#8A6B2C]/20 rounded-xl px-4 py-3 mb-6">
+          <p className="text-xs text-[#8A6B2C] font-medium mb-2">Del mes pasado, todavía no cargaste este mes:</p>
+          <div className="flex flex-wrap gap-2">
+            {sugeridosFijos.map(s => (
+              <button
+                key={s.concepto}
+                onClick={() => abrirSugeridoFijo(s)}
+                className="text-xs px-3 py-1.5 rounded-full border border-dashed border-[#8A6B2C]/40 text-[#8A6B2C]/70 hover:text-[#8A6B2C] hover:border-[#8A6B2C] transition-colors"
+              >
+                {s.concepto}
+              </button>
+            ))}
+            {sugeridosSueldos.map(s => (
+              <button
+                key={s.profeNombre}
+                onClick={() => abrirSugeridoSueldo(s)}
+                className="text-xs px-3 py-1.5 rounded-full border border-dashed border-[#8A6B2C]/40 text-[#8A6B2C]/70 hover:text-[#8A6B2C] hover:border-[#8A6B2C] transition-colors"
+              >
+                Sueldo {s.profeNombre}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {cargando ? (
         <p className="text-[#8A8378] text-sm">Cargando gastos…</p>
@@ -278,17 +413,17 @@ export default function Gastos() {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
-                <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Fecha</th>
-                <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Concepto</th>
-                <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Categoría</th>
-                <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Estado</th>
-                <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Monto</th>
+                <th onClick={() => toggleOrden('fecha')} className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B] cursor-pointer select-none hover:text-[#5C6F5D]">Fecha{flechaOrden('fecha')}</th>
+                <th onClick={() => toggleOrden('concepto')} className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B] cursor-pointer select-none hover:text-[#5C6F5D]">Concepto{flechaOrden('concepto')}</th>
+                <th onClick={() => toggleOrden('categoria')} className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] cursor-pointer select-none hover:text-[#5C6F5D]">Categoría{flechaOrden('categoria')}</th>
+                <th onClick={() => toggleOrden('estado')} className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] cursor-pointer select-none hover:text-[#5C6F5D]">Estado{flechaOrden('estado')}</th>
+                <th onClick={() => toggleOrden('monto')} className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] cursor-pointer select-none hover:text-[#5C6F5D]">Monto{flechaOrden('monto')}</th>
                 <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Salió de</th>
                 <th className="w-32"></th>
               </tr>
             </thead>
             <tbody>
-              {gastosFiltrados.map(g => (
+              {gastosOrdenados.map(g => (
                 <tr key={g.id} className={`border-b border-[#221F1B]/8 last:border-0 hover:bg-[#F5F1E9] ${g.estado === 'Proyectado' ? 'bg-[#FBF4E4]' : ''}`}>
                   <td className="px-4 py-3 text-sm text-[#221F1B]">{g.fecha}</td>
                   <td className="px-4 py-3 text-sm text-[#221F1B]">{g.concepto}</td>
@@ -315,7 +450,7 @@ export default function Gastos() {
                   </td>
                 </tr>
               ))}
-              {gastosFiltrados.length === 0 && (
+              {gastosOrdenados.length === 0 && (
                 <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin gastos cargados este mes</td></tr>
               )}
             </tbody>
@@ -369,7 +504,10 @@ export default function Gastos() {
                 </div>
 
                 <label className="block text-xs text-[#8A8378] mb-1">Monto</label>
-                <input type="number" value={montoForm} onChange={e => setMontoForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+                <input type="number" value={montoForm} onChange={e => setMontoForm(e.target.value)} placeholder={montoPlaceholder || undefined} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+                {montoPlaceholder && !montoForm && (
+                  <p className="text-[11px] text-[#8A8378] -mt-2 mb-3">Referencia del mes pasado, escribí el monto real de este mes</p>
+                )}
               </>
             ) : (
               <>
@@ -393,13 +531,16 @@ export default function Gastos() {
                 <div className="grid grid-cols-2 gap-3 mb-1">
                   <div>
                     <label className="block text-xs text-[#8A8378] mb-1">Horas del mes</label>
-                    <input type="number" value={horasForm} onChange={e => setHorasForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D]" />
+                    <input type="number" value={horasForm} onChange={e => setHorasForm(e.target.value)} placeholder={horasPlaceholder || undefined} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D]" />
                   </div>
                   <div>
                     <label className="block text-xs text-[#8A8378] mb-1">$ / hora</label>
                     <input type="number" value={tarifaForm} onChange={e => setTarifaForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D]" />
                   </div>
                 </div>
+                {horasPlaceholder && !horasForm && (
+                  <p className="text-[11px] text-[#8A8378] mb-2">Horas del mes pasado como referencia, escribí las de este mes</p>
+                )}
                 <p className="text-sm text-[#221F1B] mb-3">
                   Total a pagar: <span className="font-semibold">${montoCalculadoSueldo.toLocaleString('es-AR')}</span>
                 </p>
