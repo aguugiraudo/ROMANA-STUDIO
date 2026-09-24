@@ -38,6 +38,7 @@ export default function Gastos() {
   const [gastosMesAnterior, setGastosMesAnterior] = useState([])
   const [profes, setProfes] = useState([])
   const [cuentas, setCuentas] = useState([])
+  const [trayendo, setTrayendo] = useState(false)
   const [modal, setModal] = useState(null)
   const [modo, setModo] = useState('simple')
   const [fechaForm, setFechaForm] = useState(hoyISO())
@@ -105,6 +106,9 @@ export default function Gastos() {
   }
   const [anio, mesNum] = mes.split('-').map(Number)
   const labelMes = `${NOMBRES_MES[mesNum - 1]} ${anio}`
+  const mesPrevio = mesAnterior(mes)
+  const [anioPrevio, mesNumPrevio] = mesPrevio.split('-').map(Number)
+  const labelMesPrevio = `${NOMBRES_MES[mesNumPrevio - 1]} ${anioPrevio}`
 
   const pagados = gastos.filter(g => g.estado === 'Pagado')
   const proyectados = gastos.filter(g => g.estado === 'Proyectado')
@@ -121,7 +125,7 @@ export default function Gastos() {
     total: pagados.filter(g => g.forma_pago === 'Transferencia' && g.cuenta_id === ct.id).reduce((acc, g) => acc + Number(g.monto), 0)
   }))
 
-  // ---- Sugeridos: fijos y sueldos del mes anterior que todavía no están este mes ----
+  // ---- Fijos y sueldos del mes anterior que todavía no están cargados este mes ----
   const conceptosFijosEsteMes = new Set(gastos.filter(g => g.categoria === 'Fijo' && !esSueldo(g)).map(g => g.concepto))
   const sugeridosFijos = []
   const vistosFijos = new Set()
@@ -137,11 +141,47 @@ export default function Gastos() {
   gastosMesAnterior.filter(g => esSueldo(g)).forEach(g => {
     if (vistosProfes.has(g.pagado_por) || profesEsteMes.has(g.pagado_por)) return
     vistosProfes.add(g.pagado_por)
-    const profe = profes.find(p => p.nombre === g.pagado_por)
-    sugeridosSueldos.push({ profeNombre: g.pagado_por, profeId: profe?.id || null, horas: horasDeConcepto(g.concepto) })
+    sugeridosSueldos.push({ profeNombre: g.pagado_por, monto: g.monto, horas: horasDeConcepto(g.concepto) })
   })
 
   const hayaSugeridos = sugeridosFijos.length > 0 || sugeridosSueldos.length > 0
+
+  async function traerFijosYSueldos() {
+    if (trayendo || !hayaSugeridos) return
+    setTrayendo(true)
+    const inserts = []
+    sugeridosFijos.forEach(s => {
+      inserts.push({
+        fecha: hoyISO(),
+        concepto: s.concepto,
+        categoria: 'Fijo',
+        monto: null,
+        monto_sugerido: s.monto,
+        horas_sugeridas: null,
+        forma_pago: null,
+        cuenta_id: null,
+        pagado_por: null,
+        estado: 'Proyectado'
+      })
+    })
+    sugeridosSueldos.forEach(s => {
+      inserts.push({
+        fecha: hoyISO(),
+        concepto: `Sueldo ${s.profeNombre}`,
+        categoria: 'Variable',
+        monto: null,
+        monto_sugerido: s.monto,
+        horas_sugeridas: s.horas ? parseFloat(s.horas) : null,
+        forma_pago: null,
+        cuenta_id: null,
+        pagado_por: s.profeNombre,
+        estado: 'Proyectado'
+      })
+    })
+    await supabase.from('gastos').insert(inserts)
+    setTrayendo(false)
+    cargar()
+  }
 
   const gastosFiltrados = gastos.filter(g => {
     if (filtroEstado === 'todos') return true
@@ -154,7 +194,7 @@ export default function Gastos() {
     else if (ordenPor === 'concepto') { va = a.concepto.toLowerCase(); vb = b.concepto.toLowerCase() }
     else if (ordenPor === 'categoria') { va = esSueldo(a) ? 'Sueldo' : a.categoria; vb = esSueldo(b) ? 'Sueldo' : b.categoria }
     else if (ordenPor === 'estado') { va = a.estado; vb = b.estado }
-    else if (ordenPor === 'monto') { va = Number(a.monto); vb = Number(b.monto) }
+    else if (ordenPor === 'monto') { va = Number(a.monto) || 0; vb = Number(b.monto) || 0 }
     else { va = a.fecha; vb = b.fecha }
     if (va < vb) return ordenAsc ? -1 : 1
     if (va > vb) return ordenAsc ? 1 : -1
@@ -166,7 +206,6 @@ export default function Gastos() {
     if (ordenPor === campo) setOrdenAsc(!ordenAsc)
     else { setOrdenPor(campo); setOrdenAsc(campo === 'fecha' ? false : true) }
   }
-
   function flechaOrden(campo) {
     if (ordenPor !== campo) return ''
     return ordenAsc ? ' ▲' : ' ▼'
@@ -192,50 +231,24 @@ export default function Gastos() {
 
   function abrirEditar(g) {
     setModal({ editando: g })
-    setModo(esSueldo(g) ? 'sueldo' : 'simple')
+    const sueldo = esSueldo(g)
+    setModo(sueldo ? 'sueldo' : 'simple')
     setFechaForm(g.fecha)
     setConceptoForm(g.concepto)
     setCategoriaForm(g.categoria)
-    setMontoForm(String(g.monto))
-    setMontoPlaceholder('')
-    setHorasPlaceholder('')
+    setMontoForm(g.monto !== null && g.monto !== undefined ? String(g.monto) : '')
+    setMontoPlaceholder(g.monto_sugerido ? `Ej: $${Number(g.monto_sugerido).toLocaleString('es-AR')}` : '')
     setFormaPagoForm(g.forma_pago || 'Efectivo')
     setCuentaIdForm(g.cuenta_id || null)
     setEstadoForm(g.estado || 'Pagado')
     setMostrandoNuevoProfe(false)
-  }
-
-  function abrirSugeridoFijo(sugerido) {
-    setModal({})
-    setModo('simple')
-    setFechaForm(hoyISO())
-    setConceptoForm(sugerido.concepto)
-    setCategoriaForm('Fijo')
-    setMontoForm('')
-    setMontoPlaceholder(`Ej: $${Number(sugerido.monto).toLocaleString('es-AR')}`)
-    setFormaPagoForm('Efectivo')
-    setCuentaIdForm(null)
-    setEstadoForm('Pagado')
-  }
-
-  function abrirSugeridoSueldo(sugerido) {
-    setModal({})
-    setModo('sueldo')
-    setFechaForm(hoyISO())
-    if (sugerido.profeId) {
-      setProfeIdForm(sugerido.profeId)
-      const p = profes.find(x => x.id === sugerido.profeId)
-      setTarifaForm(p ? String(p.tarifa_hora) : '')
-    } else {
-      setProfeIdForm(profes[0]?.id || '')
-      setTarifaForm(profes[0]?.tarifa_hora ? String(profes[0].tarifa_hora) : '')
+    if (sueldo) {
+      const profe = profes.find(p => p.nombre === g.pagado_por)
+      setProfeIdForm(profe?.id || profes[0]?.id || '')
+      setTarifaForm(profe ? String(profe.tarifa_hora) : (profes[0]?.tarifa_hora ? String(profes[0].tarifa_hora) : ''))
+      setHorasForm('')
+      setHorasPlaceholder(g.horas_sugeridas ? String(g.horas_sugeridas) : horasDeConcepto(g.concepto))
     }
-    setHorasForm('')
-    setHorasPlaceholder(sugerido.horas ? `Ej: ${sugerido.horas}` : '')
-    setFormaPagoForm('Efectivo')
-    setCuentaIdForm(null)
-    setEstadoForm('Pagado')
-    setMostrandoNuevoProfe(false)
   }
 
   function elegirProfe(id) {
@@ -268,6 +281,8 @@ export default function Gastos() {
         concepto: `Sueldo ${profe.nombre} (${horasForm}hs)`,
         categoria: 'Variable',
         monto: montoCalculadoSueldo,
+        monto_sugerido: null,
+        horas_sugeridas: null,
         forma_pago: estadoForm === 'Pagado' ? formaPagoForm : null,
         cuenta_id: estadoForm === 'Pagado' && formaPagoForm === 'Transferencia' ? cuentaIdForm : null,
         pagado_por: profe.nombre,
@@ -280,6 +295,8 @@ export default function Gastos() {
         concepto: conceptoForm.trim(),
         categoria: categoriaForm,
         monto: parseFloat(montoForm) || 0,
+        monto_sugerido: null,
+        horas_sugeridas: null,
         forma_pago: estadoForm === 'Pagado' ? formaPagoForm : null,
         cuenta_id: estadoForm === 'Pagado' && formaPagoForm === 'Transferencia' ? cuentaIdForm : null,
         pagado_por: null,
@@ -349,28 +366,10 @@ export default function Gastos() {
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-6">Gastos</p>
 
       {!cargando && hayaSugeridos && (
-        <div className="bg-[#FBF4E4] border border-[#8A6B2C]/20 rounded-xl px-4 py-3 mb-6">
-          <p className="text-xs text-[#8A6B2C] font-medium mb-2">Del mes pasado, todavía no cargaste este mes:</p>
-          <div className="flex flex-wrap gap-2">
-            {sugeridosFijos.map(s => (
-              <button
-                key={s.concepto}
-                onClick={() => abrirSugeridoFijo(s)}
-                className="text-xs px-3 py-1.5 rounded-full border border-dashed border-[#8A6B2C]/40 text-[#8A6B2C]/70 hover:text-[#8A6B2C] hover:border-[#8A6B2C] transition-colors"
-              >
-                {s.concepto}
-              </button>
-            ))}
-            {sugeridosSueldos.map(s => (
-              <button
-                key={s.profeNombre}
-                onClick={() => abrirSugeridoSueldo(s)}
-                className="text-xs px-3 py-1.5 rounded-full border border-dashed border-[#8A6B2C]/40 text-[#8A6B2C]/70 hover:text-[#8A6B2C] hover:border-[#8A6B2C] transition-colors"
-              >
-                Sueldo {s.profeNombre}
-              </button>
-            ))}
-          </div>
+        <div className="mb-6">
+          <button onClick={traerFijosYSueldos} disabled={trayendo} className="text-sm px-4 py-2 rounded-full bg-[#8A6B2C] text-white hover:bg-[#755A24] disabled:opacity-60">
+            {trayendo ? 'Trayendo…' : `Traer fijos y sueldos de ${labelMesPrevio} (${sugeridosFijos.length + sugeridosSueldos.length})`}
+          </button>
         </div>
       )}
 
@@ -423,33 +422,44 @@ export default function Gastos() {
               </tr>
             </thead>
             <tbody>
-              {gastosOrdenados.map(g => (
-                <tr key={g.id} className={`border-b border-[#221F1B]/8 last:border-0 hover:bg-[#F5F1E9] ${g.estado === 'Proyectado' ? 'bg-[#FBF4E4]' : ''}`}>
-                  <td className="px-4 py-3 text-sm text-[#221F1B]">{g.fecha}</td>
-                  <td className="px-4 py-3 text-sm text-[#221F1B]">{g.concepto}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`text-xs px-2 py-1 rounded-full ${esSueldo(g) ? 'bg-[#8A6B2C] text-white' : g.categoria === 'Fijo' ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
-                      {esSueldo(g) ? 'Sueldo' : g.categoria}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${g.estado === 'Pagado' ? 'bg-[#5C6F5D] text-white' : 'border border-[#8A6B2C] text-[#8A6B2C]'}`}>
-                      {g.estado}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-center text-[#221F1B]">${Number(g.monto).toLocaleString('es-AR')}</td>
-                  <td className="px-4 py-3 text-sm text-center text-[#221F1B]">
-                    {g.estado === 'Proyectado' ? '—' : g.forma_pago === 'Transferencia' ? g.cuentas?.nombre || 'Transferencia' : (g.forma_pago || '—')}
-                  </td>
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    {g.estado === 'Proyectado' && (
-                      <button onClick={() => marcarComoPagado(g)} className="text-xs text-[#5C6F5D] hover:underline mr-3">Marcar pagado</button>
-                    )}
-                    <button onClick={() => abrirEditar(g)} className="text-xs text-[#5C6F5D] hover:underline mr-3">Editar</button>
-                    <button onClick={() => setConfirmarBorrar(g)} className="text-xs text-[#B5504A] hover:underline">Borrar</button>
-                  </td>
-                </tr>
-              ))}
+              {gastosOrdenados.map(g => {
+                const sinMonto = g.monto === null || g.monto === undefined
+                return (
+                  <tr key={g.id} className={`border-b border-[#221F1B]/8 last:border-0 hover:bg-[#F5F1E9] ${g.estado === 'Proyectado' ? 'bg-[#FBF4E4]' : ''}`}>
+                    <td className="px-4 py-3 text-sm text-[#221F1B]">{g.fecha}</td>
+                    <td className="px-4 py-3 text-sm text-[#221F1B]">{g.concepto}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-xs px-2 py-1 rounded-full ${esSueldo(g) ? 'bg-[#8A6B2C] text-white' : g.categoria === 'Fijo' ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
+                        {esSueldo(g) ? 'Sueldo' : g.categoria}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${g.estado === 'Pagado' ? 'bg-[#5C6F5D] text-white' : 'border border-[#8A6B2C] text-[#8A6B2C]'}`}>
+                        {g.estado}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-center">
+                      {sinMonto ? (
+                        <button onClick={() => abrirEditar(g)} className="text-[#B7B9B1] italic hover:text-[#8A6B2C]">
+                          {g.monto_sugerido ? `$${Number(g.monto_sugerido).toLocaleString('es-AR')}` : 'Sin monto'}
+                        </button>
+                      ) : (
+                        <span className="text-[#221F1B]">${Number(g.monto).toLocaleString('es-AR')}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-center text-[#221F1B]">
+                      {g.estado === 'Proyectado' ? '—' : g.forma_pago === 'Transferencia' ? g.cuentas?.nombre || 'Transferencia' : (g.forma_pago || '—')}
+                    </td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      {g.estado === 'Proyectado' && !sinMonto && (
+                        <button onClick={() => marcarComoPagado(g)} className="text-xs text-[#5C6F5D] hover:underline mr-3">Marcar pagado</button>
+                      )}
+                      <button onClick={() => abrirEditar(g)} className="text-xs text-[#5C6F5D] hover:underline mr-3">{sinMonto ? 'Completar' : 'Editar'}</button>
+                      <button onClick={() => setConfirmarBorrar(g)} className="text-xs text-[#B5504A] hover:underline">Borrar</button>
+                    </td>
+                  </tr>
+                )
+              })}
               {gastosOrdenados.length === 0 && (
                 <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin gastos cargados este mes</td></tr>
               )}
@@ -504,9 +514,9 @@ export default function Gastos() {
                 </div>
 
                 <label className="block text-xs text-[#8A8378] mb-1">Monto</label>
-                <input type="number" value={montoForm} onChange={e => setMontoForm(e.target.value)} placeholder={montoPlaceholder || undefined} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+                <input type="number" value={montoForm} onChange={e => setMontoForm(e.target.value)} placeholder={montoPlaceholder || undefined} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-1 outline-none focus:border-[#5C6F5D]" />
                 {montoPlaceholder && !montoForm && (
-                  <p className="text-[11px] text-[#8A8378] -mt-2 mb-3">Referencia del mes pasado, escribí el monto real de este mes</p>
+                  <p className="text-[11px] text-[#8A8378] mb-3">Ese es el monto de {labelMesPrevio} como referencia — escribí el de este mes</p>
                 )}
               </>
             ) : (
@@ -539,7 +549,7 @@ export default function Gastos() {
                   </div>
                 </div>
                 {horasPlaceholder && !horasForm && (
-                  <p className="text-[11px] text-[#8A8378] mb-2">Horas del mes pasado como referencia, escribí las de este mes</p>
+                  <p className="text-[11px] text-[#8A8378] mb-2">{labelMesPrevio}: {horasPlaceholder}hs — escribí las de este mes</p>
                 )}
                 <p className="text-sm text-[#221F1B] mb-3">
                   Total a pagar: <span className="font-semibold">${montoCalculadoSueldo.toLocaleString('es-AR')}</span>
