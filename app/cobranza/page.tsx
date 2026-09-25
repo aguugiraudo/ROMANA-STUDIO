@@ -203,10 +203,9 @@ export default function Cobranza() {
   }
 
   async function guardarCuotas() {
-    const hoy = hoyISO()
     const cambios = Object.entries(cuotasEdit).filter(([k, v]) => cuotasValores[k] !== v)
     for (const [clases, valor] of cambios) {
-      await supabase.from('cuotas_valores').insert({ clases_semana: parseInt(clases), valor: parseFloat(valor), vigente_desde: hoy })
+      await supabase.from('cuotas_valores').insert({ clases_semana: parseInt(clases), valor: parseFloat(valor), vigente_desde: mes })
     }
     setCuotasModal(false)
     cargar()
@@ -561,7 +560,7 @@ export default function Cobranza() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setCuotasModal(false)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-medium text-[#221F1B] mb-1">Valores de cuota vigentes</p>
-            <p className="text-xs text-[#8A8378] mb-4">Al cambiar un valor, se guarda como nuevo vigente desde hoy — el historial de meses anteriores no se altera</p>
+            <p className="text-xs text-[#8A8378] mb-4">Se guarda como vigente desde <span className="font-medium">{labelMes}</span> (el mes que estás mirando ahora) — el historial de meses anteriores no se altera</p>
             <div className="flex flex-col gap-3 mb-5">
               {[1, 2, 3, 4].map(n => (
                 <div key={n} className="flex items-center justify-between gap-3">
