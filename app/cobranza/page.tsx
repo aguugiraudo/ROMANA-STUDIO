@@ -54,6 +54,7 @@ export default function Cobranza() {
   const [viendo, setViendo] = useState(null)
   const [inscripcionesDetalle, setInscripcionesDetalle] = useState([])
   const [confirmarBaja, setConfirmarBaja] = useState(null)
+  const [actualizandoNoContinua, setActualizandoNoContinua] = useState(false)
 
   useEffect(() => {
     const r = getRol()
@@ -109,6 +110,12 @@ export default function Cobranza() {
   }
   const [anio, mesNum] = mes.split('-').map(Number)
   const labelMes = `${NOMBRES_MES[mesNum - 1]} ${anio}`
+  const [anioSig, mesNumSig] = (() => {
+    const [y, m] = mes.split('-').map(Number)
+    const f = new Date(y, m, 1)
+    return [f.getFullYear(), f.getMonth() + 1]
+  })()
+  const labelMesSiguiente = `${NOMBRES_MES[mesNumSig - 1]} ${anioSig}`
 
   const fechaVencimiento = `${mes.slice(0, 8)}10`
 
@@ -242,6 +249,23 @@ export default function Cobranza() {
     setInscripcionesDetalle(data || [])
   }
 
+  const yaMarcadoNoContinua = inscripcionesDetalle.length > 0 && inscripcionesDetalle.every(i => i.no_continua)
+
+  async function toggleNoContinua() {
+    if (!viendo || actualizandoNoContinua) return
+    setActualizandoNoContinua(true)
+    const nuevoValor = !yaMarcadoNoContinua
+    await supabase.from('inscripciones').update({ no_continua: nuevoValor }).eq('alumno_id', viendo.id).eq('mes', mes).eq('estado', 'activo')
+    const { data } = await supabase
+      .from('inscripciones')
+      .select('*, horarios_clase(dia, hora)')
+      .eq('alumno_id', viendo.id)
+      .eq('mes', mes)
+      .eq('estado', 'activo')
+    setInscripcionesDetalle(data || [])
+    setActualizandoNoContinua(false)
+  }
+
   async function confirmarBajaAhora() {
     if (!confirmarBaja) return
     await supabase.from('inscripciones').update({ estado: 'baja' }).eq('alumno_id', confirmarBaja.id).eq('mes', mes).eq('estado', 'activo')
@@ -281,6 +305,7 @@ export default function Cobranza() {
           <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
           <a href="/alumnos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Alumnos</a>
           <a href="/dashboard" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Dashboard</a>
+          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
           <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
         </nav>
       </div>
@@ -297,7 +322,7 @@ export default function Cobranza() {
       </div>
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-1">Cobranza</p>
-      <p className="text-xs text-[#8A8378] mb-6">Vencimiento del mes: día 10 · click en el nombre para ver horarios o dar de baja · click en el estado para copiar mensaje de WhatsApp</p>
+      <p className="text-xs text-[#8A8378] mb-6">Vencimiento del mes: día 10 · click en el nombre para ver horarios, marcar que no continúa, o dar de baja · click en el estado para copiar mensaje de WhatsApp</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div className="flex flex-col gap-3">
@@ -432,6 +457,23 @@ export default function Cobranza() {
                 <p className="text-sm text-[#8A8378]">Sin horarios anotados este mes</p>
               )}
             </div>
+
+            {inscripcionesDetalle.length > 0 && (
+              <div className="flex items-center justify-between bg-[#F5F1E9] rounded-lg px-3 py-2.5 mb-5">
+                <div>
+                  <p className="text-sm text-[#221F1B]">No continúa en {labelMesSiguiente}</p>
+                  <p className="text-[10px] text-[#8A8378]">Sigue contando normal en {labelMes} — solo evita que se lo copie al mes que viene</p>
+                </div>
+                <button
+                  onClick={toggleNoContinua}
+                  disabled={actualizandoNoContinua}
+                  className={`w-11 h-6 rounded-full relative transition-colors flex-shrink-0 ${yaMarcadoNoContinua ? 'bg-[#8A6B2C]' : 'bg-[#D8D2C4]'}`}
+                >
+                  <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${yaMarcadoNoContinua ? 'left-5' : 'left-0.5'}`} />
+                </button>
+              </div>
+            )}
+
             <div className="flex justify-between items-center">
               <button onClick={() => setConfirmarBaja(viendo)} className="text-xs text-[#B5504A] hover:underline">
                 Dar de baja este mes
@@ -445,8 +487,11 @@ export default function Cobranza() {
       {confirmarBaja && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setConfirmarBaja(null)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center" onClick={e => e.stopPropagation()}>
-            <p className="text-sm text-[#221F1B] mb-6">
-              ¿Seguro que querés dar de baja a <span className="font-semibold">{confirmarBaja.nombre}</span> de todos sus horarios de {labelMes}? Va a desaparecer de la grilla de Días y Horarios este mes.
+            <p className="text-sm text-[#221F1B] mb-2">
+              ¿Seguro que querés dar de baja a <span className="font-semibold">{confirmarBaja.nombre}</span> de todos sus horarios de {labelMes}?
+            </p>
+            <p className="text-xs text-[#8A8378] mb-6">
+              Va a desaparecer de la grilla y de la cobranza de {labelMes}, como si no hubiera venido este mes. Si en cambio vino todo el mes y se va recién {labelMesSiguiente}, cerrá esto y usá "No continúa en {labelMesSiguiente}" en vez de esto.
             </p>
             <div className="flex gap-3 justify-center">
               <button onClick={() => setConfirmarBaja(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>

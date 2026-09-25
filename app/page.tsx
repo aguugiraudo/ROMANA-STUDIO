@@ -56,6 +56,8 @@ export default function Grilla() {
   const [modal, setModal] = useState(null)
   const [busqueda, setBusqueda] = useState('')
   const [copiando, setCopiando] = useState(false)
+  const [confirmarCopiar, setConfirmarCopiar] = useState(false)
+  const [ayudaAbierta, setAyudaAbierta] = useState(false)
   const [confirmarBaja, setConfirmarBaja] = useState(null)
   const [confirmarMover, setConfirmarMover] = useState(null)
   const [dispAbierta, setDispAbierta] = useState(false)
@@ -144,16 +146,24 @@ export default function Grilla() {
   const [anioPrevio, mesNumPrevio] = mesPrevio.split('-').map(Number)
   const labelMesPrevio = `${NOMBRES_MES[mesNumPrevio - 1]} ${anioPrevio}`
 
-  async function copiarMesAnterior() {
+  async function copiarMesAnteriorAhora() {
+    setConfirmarCopiar(false)
     setCopiando(true)
     const { data: prev } = await supabase
-      .from('inscripciones').select('alumno_id, horario_clase_id')
+      .from('inscripciones').select('alumno_id, horario_clase_id, no_continua')
       .eq('mes', mesPrevio).eq('estado', 'activo')
     if (prev && prev.length > 0) {
-      const nuevas = prev.map(p => ({ alumno_id: p.alumno_id, horario_clase_id: p.horario_clase_id, mes, estado: 'activo' }))
-      await supabase.from('inscripciones').insert(nuevas)
-      const idsUnicos = [...new Set(prev.map(p => p.alumno_id))]
-      for (const id of idsUnicos) { await sincronizarEstadoAlumno(id) }
+      const noContinuan = new Set(prev.filter(p => p.no_continua).map(p => p.alumno_id))
+      const yaExisten = new Set(inscripciones.map(i => `${i.alumno_id}|${i.horario_clase_id}`))
+      const nuevas = prev
+        .filter(p => !noContinuan.has(p.alumno_id))
+        .filter(p => !yaExisten.has(`${p.alumno_id}|${p.horario_clase_id}`))
+        .map(p => ({ alumno_id: p.alumno_id, horario_clase_id: p.horario_clase_id, mes, estado: 'activo' }))
+      if (nuevas.length > 0) {
+        await supabase.from('inscripciones').insert(nuevas)
+        const idsUnicos = [...new Set(nuevas.map(p => p.alumno_id))]
+        for (const id of idsUnicos) { await sincronizarEstadoAlumno(id) }
+      }
     }
     setCopiando(false)
     cargar()
@@ -264,7 +274,6 @@ export default function Grilla() {
 
   const alumnosFiltrados = alumnosList.filter(a => a.nombre.toLowerCase().includes(busqueda.toLowerCase()))
   const hayCoincidenciaExacta = alumnosList.some(a => a.nombre.toLowerCase() === busqueda.trim().toLowerCase())
-  const mesVacio = !cargando && inscripciones.length === 0
 
   const bloquesPorDia = DIAS.map(dia => {
     const horasLibres = horasUnicas
@@ -460,10 +469,13 @@ export default function Grilla() {
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-5">Días y Horarios</p>
 
-      {!esProfe && mesVacio && (
-        <div className="mb-6">
-          <button onClick={copiarMesAnterior} disabled={copiando} className="text-sm px-4 py-2 rounded-full bg-[#5C6F5D] text-white hover:bg-[#4C5C4D] disabled:opacity-60">
-            {copiando ? 'Copiando…' : `Copiar inscripciones de ${labelMesPrevio}`}
+      {!esProfe && (
+        <div className="mb-6 flex gap-2 flex-wrap items-center">
+          <button onClick={() => setConfirmarCopiar(true)} disabled={copiando} className="text-sm px-4 py-2 rounded-full bg-white border border-[#221F1B]/15 text-[#221F1B] hover:border-[#5C6F5D] hover:text-[#5C6F5D] disabled:opacity-60">
+            {copiando ? 'Trayendo…' : `Traer inscriptos de ${labelMesPrevio}`}
+          </button>
+          <button onClick={() => setAyudaAbierta(true)} className="text-sm px-3 py-2 rounded-full text-[#8A8378] hover:text-[#5C6F5D] flex items-center gap-1">
+            <span>ℹ️</span> ¿Cómo funciona?
           </button>
         </div>
       )}
@@ -554,8 +566,8 @@ export default function Grilla() {
                                   draggable
                                   onDragStart={e => onDragStartCapsula(e, i)}
                                   onClick={e => e.stopPropagation()}
-                                  className="cursor-grab active:cursor-grabbing block text-center rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1 truncate"
-                                  title={i.alumnos?.nombre}
+                                  className={`cursor-grab active:cursor-grabbing block text-center rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1 truncate ${i.no_continua ? 'ring-2 ring-[#8A6B2C]' : ''}`}
+                                  title={i.no_continua ? `${i.alumnos?.nombre} — no continúa el mes que viene` : i.alumnos?.nombre}
                                 >
                                   {i.alumnos?.nombre}
                                 </span>
@@ -643,7 +655,7 @@ export default function Grilla() {
                           <button
                             key={i.id}
                             onClick={() => setConfirmarBaja({ id: i.id, nombre: i.alumnos?.nombre, alumnoId: i.alumno_id })}
-                            className="rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1"
+                            className={`rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1 ${i.no_continua ? 'ring-2 ring-[#8A6B2C]' : ''}`}
                           >
                             {i.alumnos?.nombre}
                           </button>
@@ -694,11 +706,66 @@ export default function Grilla() {
         </div>
       )}
 
+      {confirmarCopiar && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setConfirmarCopiar(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-3">Traer inscriptos de {labelMesPrevio}</p>
+            <p className="text-sm text-[#221F1B] mb-3">
+              Trae a {labelMes} a todos los activos de {labelMesPrevio}, <span className="font-medium">salvo</span> a quien hayas marcado "No continúa el mes que viene" desde Cobranza. No duplica a nadie que ya hayas anotado a mano.
+            </p>
+            <p className="text-xs text-[#8A8378] mb-5">
+              Lo podés usar en cualquier momento del mes, cuantas veces quieras. Si alguien te avisa que se va después de haber copiado, sacalo directo del mes nuevo con la cruz roja de la cápsula.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setConfirmarCopiar(false)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
+              <button onClick={copiarMesAnteriorAhora} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Traer ahora</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {ayudaAbierta && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setAyudaAbierta(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-4">Cómo manejar altas y bajas entre meses</p>
+
+            <div className="flex flex-col gap-4 mb-2">
+              <div>
+                <p className="text-sm font-medium text-[#5C6F5D] mb-1">1. Alumno nuevo que arranca el mes que viene</p>
+                <p className="text-sm text-[#221F1B]">Anotalo directo en la grilla del mes que arranca (cambiá de mes arriba y anotalo ahí). No hace falta esperar a nada — no afecta el mes actual para nada.</p>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-[#B5504A] mb-1">2. Dar de baja (la cruz roja de la cápsula)</p>
+                <p className="text-sm text-[#221F1B]">Solo para errores de carga: saca a la persona de ese mes puntual como si no hubiera venido. No la uses para alguien que sí vino todo el mes y se va después — eso es el punto 3.</p>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-[#8A6B2C] mb-1">3. "No continúa el mes que viene" (desde Cobranza, click en el nombre)</p>
+                <p className="text-sm text-[#221F1B]">Para alguien que vino todo el mes pero avisó que no sigue. No le cambia nada al mes actual — sigue de alta, sigue en la cobranza y en el estado de resultado. Solo evita que se lo copie al mes siguiente.</p>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-[#221F1B]/70 mb-1">4. "Traer inscriptos de [mes anterior]"</p>
+                <p className="text-sm text-[#221F1B]">Trae a todos los activos del mes anterior, salvo los marcados con el punto 3. Se puede usar en cualquier momento, no borra ni duplica a nadie que ya hayas anotado a mano.</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setAyudaAbierta(false)} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Entendido</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmarBaja && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setConfirmarBaja(null)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center" onClick={e => e.stopPropagation()}>
-            <p className="text-sm text-[#221F1B] mb-6">
+            <p className="text-sm text-[#221F1B] mb-2">
               ¿Seguro que querés sacar a <span className="font-semibold">{confirmarBaja.nombre}</span> de este horario?
+            </p>
+            <p className="text-xs text-[#8A8378] mb-6">
+              Esto lo saca de {labelMes} directamente, como si no hubiera venido este mes. Si en cambio vino todo el mes y se va recién el que viene, cerrá esto y usá "No continúa el mes que viene" desde Cobranza en vez de sacarlo de acá.
             </p>
             <div className="flex gap-3 justify-center">
               <button onClick={() => setConfirmarBaja(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
