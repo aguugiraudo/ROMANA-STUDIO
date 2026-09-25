@@ -89,8 +89,12 @@ export default function Cobranza() {
 
     const { data: cv } = await supabase
       .from('cuotas_valores').select('*').order('vigente_desde', { ascending: false })
+    const [y, m] = mes.split('-').map(Number)
+    const finMesVista = new Date(y, m, 1)
+    const finMesVistaISO = `${finMesVista.getFullYear()}-${String(finMesVista.getMonth() + 1).padStart(2, '0')}-01`
+    const cvVigentesEnMes = (cv || []).filter(v => v.vigente_desde < finMesVistaISO)
     const mapa = {}
-    ;(cv || []).forEach(v => { if (!(v.clases_semana in mapa)) mapa[v.clases_semana] = v.valor })
+    cvVigentesEnMes.forEach(v => { if (!(v.clases_semana in mapa)) mapa[v.clases_semana] = v.valor })
     setCuotasValores(mapa)
     setCuotasEdit(mapa)
 
