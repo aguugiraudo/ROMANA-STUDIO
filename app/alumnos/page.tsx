@@ -226,6 +226,13 @@ export default function Alumnos() {
   const pctGenero = totalHistorico > 0 ? Math.round((conGenero / totalHistorico) * 100) : 0
   const pctCanal = totalHistorico > 0 ? Math.round((conCanal / totalHistorico) * 100) : 0
 
+  const distribucionClases = {}
+  Object.values(clasesPorAlumno).forEach(c => {
+    distribucionClases[c] = (distribucionClases[c] || 0) + 1
+  })
+  const clavesDistribucion = Object.keys(distribucionClases).map(Number).sort((a, b) => a - b)
+  const maxDistribucion = Math.max(1, ...Object.values(distribucionClases))
+
   if (!rol) return null
 
   return (
@@ -241,13 +248,14 @@ export default function Alumnos() {
           <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
           <a href="/alumnos" className="text-sm font-medium text-[#5C6F5D] border-b-2 border-[#5C6F5D] pb-0.5">Alumnos</a>
           <a href="/dashboard" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Dashboard</a>
+          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
           <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
         </nav>
       </div>
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-5">Alumnos</p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6 max-w-xl">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 max-w-xl">
         <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-4 py-3">
           <p className="text-xs text-[#8A8378] mb-1">Alumnos históricos</p>
           <p className="text-2xl font-semibold text-[#221F1B]">{totalHistorico}</p>
@@ -265,6 +273,28 @@ export default function Alumnos() {
           </div>
           <p className="text-[10px] text-[#8A8378] text-center mt-1">{labelMesStats}</p>
         </div>
+      </div>
+
+      <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8 max-w-xl">
+        <p className="text-sm font-medium text-[#221F1B] mb-1">Alumnos por clases semanales — {labelMesStats}</p>
+        <p className="text-xs text-[#8A8378] mb-4">Cuántos van 1 vez por semana, cuántos 2, etc., de los {anotadosEnMes ?? 0} anotados ese mes</p>
+        {clavesDistribucion.length === 0 ? (
+          <p className="text-sm text-[#8A8378]">Nadie anotado en {labelMesStats} todavía.</p>
+        ) : (
+          <div className="flex items-end gap-3">
+            {clavesDistribucion.map(clases => {
+              const cantidad = distribucionClases[clases]
+              const altura = Math.max(4, (cantidad / maxDistribucion) * 100)
+              return (
+                <div key={clases} className="flex-1 flex flex-col items-center justify-end" style={{ minHeight: 110 }}>
+                  <span className="text-xs text-[#8A8378] mb-1">{cantidad}</span>
+                  <div className="w-full rounded-t-md bg-[#5C6F5D]" style={{ height: `${altura}px` }} />
+                  <span className="text-[11px] text-[#8A8378] mt-1 text-center">{clases} {clases === 1 ? 'clase' : 'clases'}/sem</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8">
