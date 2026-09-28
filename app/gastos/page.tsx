@@ -151,7 +151,7 @@ export default function Gastos() {
     const inserts = []
     sugeridosFijos.forEach(s => {
       inserts.push({
-        fecha: hoyISO(),
+        fecha: mes,
         concepto: s.concepto,
         categoria: 'Fijo',
         monto: null,
@@ -165,7 +165,7 @@ export default function Gastos() {
     })
     sugeridosSueldos.forEach(s => {
       inserts.push({
-        fecha: hoyISO(),
+        fecha: mes,
         concepto: `Sueldo ${s.profeNombre}`,
         categoria: 'Variable',
         monto: null,
@@ -217,7 +217,7 @@ export default function Gastos() {
   function abrirNuevo() {
     setModal({})
     setModo('simple')
-    setFechaForm(hoyISO())
+    setFechaForm(mes)
     setConceptoForm('')
     setCategoriaForm('Variable')
     setMontoForm('')
