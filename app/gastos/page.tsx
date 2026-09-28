@@ -125,7 +125,6 @@ export default function Gastos() {
     total: pagados.filter(g => g.forma_pago === 'Transferencia' && g.cuenta_id === ct.id).reduce((acc, g) => acc + Number(g.monto), 0)
   }))
 
-  // ---- Fijos y sueldos del mes anterior que todavía no están cargados este mes ----
   const conceptosFijosEsteMes = new Set(gastos.filter(g => g.categoria === 'Fijo' && !esSueldo(g)).map(g => g.concepto))
   const sugeridosFijos = []
   const vistosFijos = new Set()
@@ -178,8 +177,12 @@ export default function Gastos() {
         estado: 'Proyectado'
       })
     })
-    await supabase.from('gastos').insert(inserts)
+    const { error } = await supabase.from('gastos').insert(inserts)
     setTrayendo(false)
+    if (error) {
+      alert('No se pudo traer: ' + error.message)
+      return
+    }
     cargar()
   }
 
@@ -304,11 +307,15 @@ export default function Gastos() {
       }
     }
 
+    let error
     if (modal.editando) {
-      await supabase.from('gastos').update(payload).eq('id', modal.editando.id)
+      const res = await supabase.from('gastos').update(payload).eq('id', modal.editando.id)
+      error = res.error
     } else {
-      await supabase.from('gastos').insert(payload)
+      const res = await supabase.from('gastos').insert(payload)
+      error = res.error
     }
+    if (error) { alert('No se pudo guardar: ' + error.message); return }
     setModal(null)
     cargar()
   }
