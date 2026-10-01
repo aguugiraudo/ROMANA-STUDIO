@@ -25,6 +25,12 @@ function mesActualISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
 }
 
+function mesAnterior(mes) {
+  const [y, m] = mes.split('-').map(Number)
+  const fecha = new Date(y, m - 2, 1)
+  return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-01`
+}
+
 async function fetchTodasInscripciones(inicio, fin) {
   let todas = []
   let desde = 0
@@ -68,6 +74,10 @@ export default function Alumnos() {
   const [anioResumen, setAnioResumen] = useState(new Date().getFullYear())
   const [resumenMeses, setResumenMeses] = useState(Array(12).fill(0))
   const [cargandoResumen, setCargandoResumen] = useState(true)
+  const [dejaron, setDejaron] = useState([])
+  const [cargandoDejaron, setCargandoDejaron] = useState(true)
+  const [viendoDejado, setViendoDejado] = useState(null)
+  const [horariosDejado, setHorariosDejado] = useState([])
 
   useEffect(() => {
     const r = getRol()
@@ -112,6 +122,27 @@ export default function Alumnos() {
 
   useEffect(() => { if (rol) cargarAnotadosEnMes() }, [cargarAnotadosEnMes, rol])
 
+  const cargarDejaron = useCallback(async () => {
+    if (alumnos.length === 0) return
+    setCargandoDejaron(true)
+    const prevMes = mesAnterior(mesStats)
+    const [p1, p2] = await Promise.all([
+      supabase.from('inscripciones').select('alumno_id').eq('mes', prevMes).eq('estado', 'activo'),
+      supabase.from('inscripciones').select('alumno_id').eq('mes', mesStats).eq('estado', 'activo')
+    ])
+    const idsPrev = new Set((p1.data || []).map(i => i.alumno_id))
+    const idsAhora = new Set((p2.data || []).map(i => i.alumno_id))
+    const idsDejaron = [...idsPrev].filter(id => !idsAhora.has(id))
+    const lista = idsDejaron
+      .map(id => alumnos.find(a => a.id === id))
+      .filter(Boolean)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre))
+    setDejaron(lista)
+    setCargandoDejaron(false)
+  }, [mesStats, alumnos])
+
+  useEffect(() => { if (rol) cargarDejaron() }, [cargarDejaron, rol])
+
   const cargarResumenAnual = useCallback(async () => {
     setCargandoResumen(true)
     const inicio = `${anioResumen}-01-01`
@@ -136,6 +167,9 @@ export default function Alumnos() {
   }
   const [anioStats, mesNumStats] = mesStats.split('-').map(Number)
   const labelMesStats = `${NOMBRES_MES[mesNumStats - 1]} ${anioStats}`
+  const prevMesStats = mesAnterior(mesStats)
+  const [anioPrevStats, mesNumPrevStats] = prevMesStats.split('-').map(Number)
+  const labelPrevMesStats = `${NOMBRES_MES[mesNumPrevStats - 1]} ${anioPrevStats}`
 
   const totalHistorico = alumnos.length
   const totalActivos = idsActivosHoy.size
@@ -168,6 +202,17 @@ export default function Alumnos() {
       .eq('mes', mesStats)
       .eq('estado', 'activo')
     setInscripcionesDetalle(data || [])
+  }
+
+  async function abrirDetalleDejado(alumno) {
+    setViendoDejado(alumno)
+    const { data } = await supabase
+      .from('inscripciones')
+      .select('*, horarios_clase(dia, hora)')
+      .eq('alumno_id', alumno.id)
+      .eq('mes', prevMesStats)
+      .eq('estado', 'activo')
+    setHorariosDejado(data || [])
   }
 
   function abrirFusionCon(nombreA, nombreB) {
@@ -273,6 +318,28 @@ export default function Alumnos() {
           </div>
           <p className="text-[10px] text-[#8A8378] text-center mt-1">{labelMesStats}</p>
         </div>
+      </div>
+
+      <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8 max-w-xl">
+        <p className="text-sm font-medium text-[#221F1B] mb-1">Quiénes dejaron en {labelMesStats}</p>
+        <p className="text-xs text-[#8A8378] mb-4">Iban en {labelPrevMesStats} y ya no figuran en {labelMesStats} — movete de mes arriba, en &quot;Anotados en un mes&quot;, para ver otros meses</p>
+        {cargandoDejaron ? (
+          <p className="text-sm text-[#8A8378]">Cargando…</p>
+        ) : dejaron.length === 0 ? (
+          <p className="text-sm text-[#8A8378]">Nadie dejó entre {labelPrevMesStats} y {labelMesStats}.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {dejaron.map(a => (
+              <button
+                key={a.id}
+                onClick={() => abrirDetalleDejado(a)}
+                className="text-sm px-3 py-1.5 rounded-full border border-[#B5504A]/30 text-[#B5504A] hover:bg-[#FBEAE8]"
+              >
+                {a.nombre}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8 max-w-xl">
@@ -450,6 +517,28 @@ export default function Alumnos() {
             </div>
             <div className="flex justify-end mt-4">
               <button onClick={() => setViendo(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viendoDejado && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setViendoDejado(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">{viendoDejado.nombre}</p>
+            <p className="text-xs text-[#8A8378] mb-4">Dejó entre {labelPrevMesStats} y {labelMesStats}</p>
+            <p className="text-xs font-medium text-[#8A8378] uppercase tracking-wide mb-2">Horarios a los que iba en {labelPrevMesStats}</p>
+            <div className="flex flex-col gap-1.5 mb-2">
+              {horariosDejado.length > 0 ? horariosDejado.map(i => (
+                <div key={i.id} className="text-sm text-[#221F1B] bg-[#F5F1E9] rounded-lg px-3 py-2">
+                  {i.horarios_clase?.dia} — {i.horarios_clase?.hora?.slice(0, 5)}
+                </div>
+              )) : (
+                <p className="text-sm text-[#8A8378]">Sin horarios registrados</p>
+              )}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setViendoDejado(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cerrar</button>
             </div>
           </div>
         </div>
