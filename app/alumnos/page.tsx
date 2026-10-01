@@ -6,7 +6,7 @@ import { getRol, cerrarSesion, ROLES } from '../lib/auth'
 
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
-const ALTURA_MAX_BARRA = 140
+const ALTURA_MAX_BARRA = 130
 
 const SOSPECHOSOS = [
   ['DARIO K', 'DARIO KARCHESKY'],
@@ -75,9 +75,12 @@ export default function Alumnos() {
   const [resumenMeses, setResumenMeses] = useState(Array(12).fill(0))
   const [cargandoResumen, setCargandoResumen] = useState(true)
   const [dejaron, setDejaron] = useState([])
-  const [cargandoDejaron, setCargandoDejaron] = useState(true)
+  const [nuevosEnMes, setNuevosEnMes] = useState([])
+  const [cargandoComparacion, setCargandoComparacion] = useState(true)
   const [viendoDejado, setViendoDejado] = useState(null)
   const [horariosDejado, setHorariosDejado] = useState([])
+  const [nuevosModalAbierto, setNuevosModalAbierto] = useState(false)
+  const [bajasModalAbierto, setBajasModalAbierto] = useState(false)
 
   useEffect(() => {
     const r = getRol()
@@ -122,9 +125,9 @@ export default function Alumnos() {
 
   useEffect(() => { if (rol) cargarAnotadosEnMes() }, [cargarAnotadosEnMes, rol])
 
-  const cargarDejaron = useCallback(async () => {
+  const cargarComparacionMes = useCallback(async () => {
     if (alumnos.length === 0) return
-    setCargandoDejaron(true)
+    setCargandoComparacion(true)
     const prevMes = mesAnterior(mesStats)
     const [p1, p2] = await Promise.all([
       supabase.from('inscripciones').select('alumno_id').eq('mes', prevMes).eq('estado', 'activo'),
@@ -132,16 +135,25 @@ export default function Alumnos() {
     ])
     const idsPrev = new Set((p1.data || []).map(i => i.alumno_id))
     const idsAhora = new Set((p2.data || []).map(i => i.alumno_id))
+
     const idsDejaron = [...idsPrev].filter(id => !idsAhora.has(id))
-    const lista = idsDejaron
+    const listaDejaron = idsDejaron
       .map(id => alumnos.find(a => a.id === id))
       .filter(Boolean)
       .sort((a, b) => a.nombre.localeCompare(b.nombre))
-    setDejaron(lista)
-    setCargandoDejaron(false)
+    setDejaron(listaDejaron)
+
+    const idsNuevos = [...idsAhora].filter(id => !idsPrev.has(id))
+    const listaNuevos = idsNuevos
+      .map(id => alumnos.find(a => a.id === id))
+      .filter(Boolean)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre))
+    setNuevosEnMes(listaNuevos)
+
+    setCargandoComparacion(false)
   }, [mesStats, alumnos])
 
-  useEffect(() => { if (rol) cargarDejaron() }, [cargarDejaron, rol])
+  useEffect(() => { if (rol) cargarComparacionMes() }, [cargarComparacionMes, rol])
 
   const cargarResumenAnual = useCallback(async () => {
     setCargandoResumen(true)
@@ -213,6 +225,16 @@ export default function Alumnos() {
       .eq('mes', prevMesStats)
       .eq('estado', 'activo')
     setHorariosDejado(data || [])
+  }
+
+  function abrirNuevoDesdeModal(a) {
+    setNuevosModalAbierto(false)
+    abrirDetalle(a)
+  }
+
+  function abrirBajaDesdeModal(a) {
+    setBajasModalAbierto(false)
+    abrirDetalleDejado(a)
   }
 
   function abrirFusionCon(nombreA, nombreB) {
@@ -300,100 +322,93 @@ export default function Alumnos() {
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-5">Alumnos</p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 max-w-xl">
-        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-4 py-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-4">
           <p className="text-xs text-[#8A8378] mb-1">Alumnos históricos</p>
-          <p className="text-2xl font-semibold text-[#221F1B]">{totalHistorico}</p>
+          <p className="text-3xl font-semibold text-[#221F1B]">{totalHistorico}</p>
         </div>
-        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-4 py-3">
+        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-4">
           <p className="text-xs text-[#8A8378] mb-1">Alumnos activos hoy</p>
-          <p className="text-2xl font-semibold text-[#5C6F5D]">{totalActivos}</p>
+          <p className="text-3xl font-semibold text-[#5C6F5D]">{totalActivos}</p>
         </div>
-        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-4 py-3 col-span-2 sm:col-span-1">
-          <p className="text-xs text-[#8A8378] mb-1">Anotados en un mes</p>
-          <div className="flex items-center gap-2">
-            <button onClick={() => cambiarMesStats(-1)} className="w-5 h-5 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-xs">‹</button>
-            <p className="text-2xl font-semibold text-[#221F1B] flex-1 text-center">{anotadosEnMes ?? '—'}</p>
-            <button onClick={() => cambiarMesStats(1)} className="w-5 h-5 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-xs">›</button>
+        <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-4">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-[#8A8378]">Anotados en un mes</p>
+            <div className="flex items-center gap-1">
+              <button onClick={() => cambiarMesStats(-1)} className="w-5 h-5 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-xs">‹</button>
+              <button onClick={() => cambiarMesStats(1)} className="w-5 h-5 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-xs">›</button>
+            </div>
           </div>
-          <p className="text-[10px] text-[#8A8378] text-center mt-1">{labelMesStats}</p>
-        </div>
-      </div>
-
-      <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8 max-w-xl">
-        <p className="text-sm font-medium text-[#221F1B] mb-1">Quiénes dejaron en {labelMesStats}</p>
-        <p className="text-xs text-[#8A8378] mb-4">Iban en {labelPrevMesStats} y ya no figuran en {labelMesStats} — movete de mes arriba, en &quot;Anotados en un mes&quot;, para ver otros meses</p>
-        {cargandoDejaron ? (
-          <p className="text-sm text-[#8A8378]">Cargando…</p>
-        ) : dejaron.length === 0 ? (
-          <p className="text-sm text-[#8A8378]">Nadie dejó entre {labelPrevMesStats} y {labelMesStats}.</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {dejaron.map(a => (
-              <button
-                key={a.id}
-                onClick={() => abrirDetalleDejado(a)}
-                className="text-sm px-3 py-1.5 rounded-full border border-[#B5504A]/30 text-[#B5504A] hover:bg-[#FBEAE8]"
-              >
-                {a.nombre}
+          <p className="text-3xl font-semibold text-[#221F1B]">{anotadosEnMes ?? '—'}</p>
+          <p className="text-[11px] text-[#8A8378] mb-2">{labelMesStats}</p>
+          {cargandoComparacion ? (
+            <p className="text-xs text-[#8A8378]">Calculando…</p>
+          ) : (
+            <div className="flex items-center gap-4">
+              <button onClick={() => setNuevosModalAbierto(true)} className="text-xs text-[#5C6F5D] hover:underline font-medium">
+                +{nuevosEnMes.length} nuevos
               </button>
-            ))}
-          </div>
-        )}
+              <button onClick={() => setBajasModalAbierto(true)} className="text-xs text-[#B5504A] hover:underline font-medium">
+                -{dejaron.length} bajas
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8 max-w-xl">
-        <p className="text-sm font-medium text-[#221F1B] mb-1">Alumnos por clases semanales — {labelMesStats}</p>
-        <p className="text-xs text-[#8A8378] mb-4">Cuántos van 1 vez por semana, cuántos 2, etc., de los {anotadosEnMes ?? 0} anotados ese mes</p>
-        {clavesDistribucion.length === 0 ? (
-          <p className="text-sm text-[#8A8378]">Nadie anotado en {labelMesStats} todavía.</p>
-        ) : (
-          <div className="flex items-end gap-3">
-            {clavesDistribucion.map(clases => {
-              const cantidad = distribucionClases[clases]
-              const altura = Math.max(4, (cantidad / maxDistribucion) * 100)
-              return (
-                <div key={clases} className="flex-1 flex flex-col items-center justify-end" style={{ minHeight: 110 }}>
-                  <span className="text-xs text-[#8A8378] mb-1">{cantidad}</span>
-                  <div className="w-full rounded-t-md bg-[#5C6F5D]" style={{ height: `${altura}px` }} />
-                  <span className="text-[11px] text-[#8A8378] mt-1 text-center">{clases} {clases === 1 ? 'clase' : 'clases'}/sem</span>
-                </div>
-              )
-            })}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5">
+          <p className="text-sm font-medium text-[#221F1B] mb-1">Alumnos por clases semanales — {labelMesStats}</p>
+          <p className="text-xs text-[#8A8378] mb-4">De los {anotadosEnMes ?? 0} anotados ese mes, cuántos van 1 vez, cuántos 2, etc.</p>
+          {clavesDistribucion.length === 0 ? (
+            <p className="text-sm text-[#8A8378]">Nadie anotado en {labelMesStats} todavía.</p>
+          ) : (
+            <div className="flex items-end gap-3">
+              {clavesDistribucion.map(clases => {
+                const cantidad = distribucionClases[clases]
+                const altura = Math.max(4, (cantidad / maxDistribucion) * 100)
+                return (
+                  <div key={clases} className="flex-1 flex flex-col items-center justify-end" style={{ minHeight: 110 }}>
+                    <span className="text-xs text-[#8A8378] mb-1">{cantidad}</span>
+                    <div className="w-full rounded-t-md bg-[#5C6F5D]" style={{ height: `${altura}px` }} />
+                    <span className="text-[11px] text-[#8A8378] mt-1 text-center">{clases} {clases === 1 ? 'clase' : 'clases'}/sem</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <p className="text-sm font-medium text-[#221F1B]">Alumnos anotados por mes</p>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setAnioResumen(a => a - 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">‹</button>
+              <span className="text-sm font-medium text-[#221F1B] w-14 text-center">{anioResumen}</span>
+              <button onClick={() => setAnioResumen(a => a + 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">›</button>
+            </div>
           </div>
-        )}
+          {cargandoResumen ? (
+            <p className="text-xs text-[#8A8378]">Cargando…</p>
+          ) : (
+            <div className="flex items-end gap-2">
+              {resumenMeses.map((cantidad, idx) => {
+                const alturaBarra = cantidad > 0 ? Math.max(4, (cantidad / maxResumen) * ALTURA_MAX_BARRA) : 2
+                return (
+                  <div key={idx} className="flex-1 flex flex-col items-center justify-end">
+                    <span className="text-[10px] text-[#8A8378] mb-1">{cantidad > 0 ? cantidad : ''}</span>
+                    <div className="w-full rounded-t-md bg-[#5C6F5D]" style={{ height: `${alturaBarra}px` }} />
+                    <span className="text-[10px] text-[#8A8378] mt-1">{MESES_CORTOS[idx]}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-8">
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <p className="text-sm font-medium text-[#221F1B]">Alumnos anotados por mes</p>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setAnioResumen(a => a - 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">‹</button>
-            <span className="text-sm font-medium text-[#221F1B] w-14 text-center">{anioResumen}</span>
-            <button onClick={() => setAnioResumen(a => a + 1)} className="w-7 h-7 rounded-full bg-[#ECE6DA] flex items-center justify-center text-[#221F1B] text-sm">›</button>
-          </div>
-        </div>
-        {cargandoResumen ? (
-          <p className="text-xs text-[#8A8378]">Cargando…</p>
-        ) : (
-          <div className="flex items-end gap-2">
-            {resumenMeses.map((cantidad, idx) => {
-              const alturaBarra = cantidad > 0 ? Math.max(4, (cantidad / maxResumen) * ALTURA_MAX_BARRA) : 2
-              return (
-                <div key={idx} className="flex-1 flex flex-col items-center justify-end">
-                  <span className="text-[10px] text-[#8A8378] mb-1">{cantidad > 0 ? cantidad : ''}</span>
-                  <div
-                    className="w-full rounded-t-md bg-[#5C6F5D]"
-                    style={{ height: `${alturaBarra}px` }}
-                  />
-                  <span className="text-[10px] text-[#8A8378] mt-1">{MESES_CORTOS[idx]}</span>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 pt-5 border-t border-[#221F1B]/8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
           <div>
             <p className="text-xs text-[#8A8378] mb-2">Género — {pctGenero}% completado ({conGenero} de {totalHistorico})</p>
             <div className="flex flex-col gap-1">
@@ -494,6 +509,48 @@ export default function Alumnos() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {nuevosModalAbierto && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setNuevosModalAbierto(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">Nuevos en {labelMesStats}</p>
+            <p className="text-xs text-[#8A8378] mb-4">No estaban en {labelPrevMesStats} y aparecen anotados este mes</p>
+            <div className="max-h-80 overflow-y-auto flex flex-col gap-1">
+              {nuevosEnMes.length === 0 ? (
+                <p className="text-sm text-[#8A8378]">Nadie nuevo este mes.</p>
+              ) : nuevosEnMes.map(a => (
+                <button key={a.id} onClick={() => abrirNuevoDesdeModal(a)} className="text-left text-sm px-3 py-2 rounded-lg hover:bg-[#F5F1E9] text-[#221F1B]">
+                  {a.nombre}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setNuevosModalAbierto(false)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bajasModalAbierto && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setBajasModalAbierto(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">Bajas en {labelMesStats}</p>
+            <p className="text-xs text-[#8A8378] mb-4">Iban en {labelPrevMesStats} y ya no figuran este mes</p>
+            <div className="max-h-80 overflow-y-auto flex flex-col gap-1">
+              {dejaron.length === 0 ? (
+                <p className="text-sm text-[#8A8378]">Nadie dejó este mes.</p>
+              ) : dejaron.map(a => (
+                <button key={a.id} onClick={() => abrirBajaDesdeModal(a)} className="text-left text-sm px-3 py-2 rounded-lg hover:bg-[#F5F1E9] text-[#221F1B]">
+                  {a.nombre}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setBajasModalAbierto(false)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cerrar</button>
+            </div>
+          </div>
         </div>
       )}
 
