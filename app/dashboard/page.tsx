@@ -72,7 +72,7 @@ export default function Dashboard() {
 
     const { data: cv } = await supabase.from('cuotas_valores').select('*').order('vigente_desde', { ascending: false })
     const cuotaBase = {}
-    ;(cv || []).forEach(v => { if (!(v.clases_semana in cuotaBase)) cuotaBase[v.clases_semana] = v.valor })
+    ;(cv || []).filter(v => v.vigente_desde < finMesISO).forEach(v => { if (!(v.clases_semana in cuotaBase)) cuotaBase[v.clases_semana] = v.valor })
 
     const conteos = {}
     const exentos = {}
@@ -150,6 +150,7 @@ export default function Dashboard() {
           <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
           <a href="/alumnos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Alumnos</a>
           <a href="/dashboard" className="text-sm font-medium text-[#5C6F5D] border-b-2 border-[#5C6F5D] pb-0.5">Dashboard</a>
+          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
           <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
         </nav>
       </div>

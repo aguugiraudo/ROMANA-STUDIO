@@ -51,6 +51,8 @@ export default function Grilla() {
   const [inscripciones, setInscripciones] = useState([])
   const [alumnosList, setAlumnosList] = useState([])
   const [listaEspera, setListaEspera] = useState([])
+  const [profes, setProfes] = useState([])
+  const [profesModal, setProfesModal] = useState(false)
   const [mes, setMes] = useState(mesActualISO())
   const [cargando, setCargando] = useState(true)
   const [modal, setModal] = useState(null)
@@ -101,6 +103,9 @@ export default function Grilla() {
 
     const { data: le } = await supabase.from('lista_espera').select('*').eq('mes', mes).order('creado_en')
     setListaEspera(le || [])
+
+    const { data: pr } = await supabase.from('profes').select('*').order('nombre')
+    setProfes(pr || [])
 
     setCargando(false)
   }, [mes])
@@ -174,6 +179,16 @@ export default function Grilla() {
   function getSlot(dia, hora) { return horarios.find(h => h.dia === dia && h.hora === hora) }
   function inscriptosDe(slotId) { return inscripciones.filter(i => i.horario_clase_id === slotId) }
   function esperaDe(slotId) { return listaEspera.filter(e => e.horario_clase_id === slotId) }
+
+  async function asignarProfe(slotId, profeId) {
+    const valor = profeId || null
+    setHorarios(prev => prev.map(h => h.id === slotId ? { ...h, profe_id: valor } : h))
+    const { error } = await supabase.from('horarios_clase').update({ profe_id: valor }).eq('id', slotId)
+    if (error) {
+      alert('No se pudo asignar el profe: ' + error.message)
+      cargar()
+    }
+  }
 
   async function abrirHorarioNuevo(dia, hora) {
     if (creandoHorario) return
@@ -457,6 +472,9 @@ export default function Grilla() {
         </div>
         {!esProfe && (
           <div className="flex gap-2 flex-wrap">
+            <button onClick={() => setProfesModal(true)} className="text-sm px-4 py-2 rounded-full bg-white border border-[#221F1B]/10 text-[#221F1B] hover:border-[#5C6F5D] hover:text-[#5C6F5D] flex items-center gap-2">
+              <span>👩‍🏫</span> Profes por horario
+            </button>
             <button onClick={() => setDispAbierta(true)} className="text-sm px-4 py-2 rounded-full bg-white border border-[#221F1B]/10 text-[#221F1B] hover:border-[#5C6F5D] hover:text-[#5C6F5D] flex items-center gap-2">
               <span>🕧</span> Disponibilidad
             </button>
@@ -680,6 +698,57 @@ export default function Grilla() {
             </div>
           </div>
         </>
+      )}
+
+      {profesModal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setProfesModal(false)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-4xl max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">Profes por horario</p>
+            <p className="text-xs text-[#8A8378] mb-4">
+              Elegí quién da cada horario. Se guarda solo, al elegir. Esto se usa en Alumnos → Retención para ver a qué profes se les van más alumnos. Si más adelante cambia el profe de un horario, el historial va a usar la asignación actual.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
+                    <th className="px-2 py-2 text-center font-mono text-xs text-[#8A8378] uppercase w-16">Hora</th>
+                    {DIAS.map(d => (
+                      <th key={d} className="px-2 py-2 text-center text-sm font-semibold text-[#221F1B]">{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {horasUnicas.map(hora => (
+                    <tr key={hora} className="border-b border-[#221F1B]/8 last:border-0">
+                      <td className="px-2 py-2 text-center font-mono font-bold text-[#221F1B]">{formatHoraCompleta(hora)}</td>
+                      {DIAS.map(dia => {
+                        const slot = getSlot(dia, hora)
+                        if (!slot) return <td key={dia} className="px-1 py-1" />
+                        return (
+                          <td key={dia} className="px-1 py-1">
+                            <select
+                              value={slot.profe_id || ''}
+                              onChange={e => asignarProfe(slot.id, e.target.value)}
+                              className={`w-full border rounded-lg px-2 py-1.5 text-xs bg-white outline-none focus:border-[#5C6F5D] ${slot.profe_id ? 'border-[#5C6F5D]/40 text-[#221F1B]' : 'border-[#221F1B]/15 text-[#8A8378]'}`}
+                            >
+                              <option value="">Sin asignar</option>
+                              {profes.map(p => (
+                                <option key={p.id} value={p.id}>{p.nombre}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setProfesModal(false)} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Listo</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {modal && (
