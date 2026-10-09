@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from './lib/supabase'
 import { getRol, cerrarSesion, ROLES } from './lib/auth'
+import Menu from './components/Menu'
 
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
@@ -16,6 +17,28 @@ function mesAnterior(mes) {
   const [y, m] = mes.split('-').map(Number)
   const fecha = new Date(y, m - 2, 1)
   return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-01`
+}
+
+function fechaISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function etiquetaFecha(f) {
+  return `${f.slice(8, 10)}/${f.slice(5, 7)}`
+}
+
+// Próxima fecha que cae en el día de la semana del horario (Lunes, Martes...), a partir de hoy o del mes que se está mirando.
+function proximaFechaDelDia(dia, mesVista) {
+  const objetivo = DIAS.indexOf(dia) + 1
+  const hoy = new Date()
+  const base = mesVista === mesActualISO()
+    ? new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())
+    : new Date(Number(mesVista.slice(0, 4)), Number(mesVista.slice(5, 7)) - 1, 1)
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i)
+    if (d.getDay() === objetivo) return fechaISO(d)
+  }
+  return fechaISO(base)
 }
 
 function formatHoraCompleta(hora) {
@@ -48,7 +71,9 @@ export default function Grilla() {
   const router = useRouter()
   const [rol, setRolState] = useState(null)
   const [horarios, setHorarios] = useState([])
+  const [horariosTodos, setHorariosTodos] = useState([])
   const [inscripciones, setInscripciones] = useState([])
+  const [recuperos, setRecuperos] = useState([])
   const [alumnosList, setAlumnosList] = useState([])
   const [listaEspera, setListaEspera] = useState([])
   const [profes, setProfes] = useState([])
@@ -56,6 +81,9 @@ export default function Grilla() {
   const [mes, setMes] = useState(mesActualISO())
   const [cargando, setCargando] = useState(true)
   const [modal, setModal] = useState(null)
+  const [modoAnotar, setModoAnotar] = useState('mes')
+  const [fechaRecupero, setFechaRecupero] = useState('')
+  const [confirmarRecupero, setConfirmarRecupero] = useState(null)
   const [busqueda, setBusqueda] = useState('')
   const [copiando, setCopiando] = useState(false)
   const [confirmarCopiar, setConfirmarCopiar] = useState(false)
@@ -89,14 +117,27 @@ export default function Grilla() {
 
   const cargar = useCallback(async () => {
     setCargando(true)
+    const [y, m] = mes.split('-').map(Number)
+    const finMes = new Date(y, m, 1)
+    const finMesISO = `${finMes.getFullYear()}-${String(finMes.getMonth() + 1).padStart(2, '0')}-01`
+
     const { data: h } = await supabase
       .from('horarios_clase').select('*').eq('activo', true).order('hora')
     setHorarios(h || [])
+
+    const { data: hAll } = await supabase.from('horarios_clase').select('*')
+    setHorariosTodos(hAll || [])
 
     const { data: i } = await supabase
       .from('inscripciones').select('*, alumnos(nombre)')
       .eq('mes', mes).eq('estado', 'activo')
     setInscripciones(i || [])
+
+    const { data: rec } = await supabase
+      .from('recuperos').select('*, alumnos(nombre)')
+      .gte('fecha', mes).lt('fecha', finMesISO)
+      .order('fecha')
+    setRecuperos(rec || [])
 
     const { data: a } = await supabase.from('alumnos').select('id, nombre').order('nombre')
     setAlumnosList(a || [])
@@ -111,6 +152,13 @@ export default function Grilla() {
   }, [mes])
 
   useEffect(() => { if (rol) cargar() }, [cargar, rol])
+
+  useEffect(() => {
+    if (!modal) return
+    setModoAnotar('mes')
+    const slot = horarios.find(h => h.id === modal.slotId)
+    setFechaRecupero(slot ? proximaFechaDelDia(slot.dia, mes) : '')
+  }, [modal])
 
   useEffect(() => {
     const img = new Image()
@@ -179,10 +227,16 @@ export default function Grilla() {
   function getSlot(dia, hora) { return horarios.find(h => h.dia === dia && h.hora === hora) }
   function inscriptosDe(slotId) { return inscripciones.filter(i => i.horario_clase_id === slotId) }
   function esperaDe(slotId) { return listaEspera.filter(e => e.horario_clase_id === slotId) }
+  function recuperosDe(slotId) {
+    return recuperos
+      .filter(r => r.horario_clase_id === slotId)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+  }
 
   async function asignarProfe(slotId, profeId) {
     const valor = profeId || null
     setHorarios(prev => prev.map(h => h.id === slotId ? { ...h, profe_id: valor } : h))
+    setHorariosTodos(prev => prev.map(h => h.id === slotId ? { ...h, profe_id: valor } : h))
     const { error } = await supabase.from('horarios_clase').update({ profe_id: valor }).eq('id', slotId)
     if (error) {
       alert('No se pudo asignar el profe: ' + error.message)
@@ -212,6 +266,46 @@ export default function Grilla() {
       setEsperaIdPendiente(null)
     }
     setModal(null); setBusqueda(''); cargar()
+  }
+
+  async function crearRecupero(slotId, alumnoId) {
+    const slot = horarios.find(h => h.id === slotId)
+    if (!slot) return
+    if (!fechaRecupero) { alert('Elegí la fecha del recupero'); return }
+    const f = new Date(fechaRecupero + 'T00:00:00')
+    if (f.getDay() !== DIAS.indexOf(slot.dia) + 1) {
+      alert(`Esa fecha no cae ${slot.dia}. Elegí un ${slot.dia}.`)
+      return
+    }
+    const mesDeFecha = `${fechaRecupero.slice(0, 7)}-01`
+    const [regs, recs, yaEsta] = await Promise.all([
+      supabase.from('inscripciones').select('id', { count: 'exact', head: true })
+        .eq('horario_clase_id', slotId).eq('mes', mesDeFecha).eq('estado', 'activo'),
+      supabase.from('recuperos').select('id', { count: 'exact', head: true })
+        .eq('horario_clase_id', slotId).eq('fecha', fechaRecupero),
+      supabase.from('inscripciones').select('id', { count: 'exact', head: true })
+        .eq('horario_clase_id', slotId).eq('mes', mesDeFecha).eq('estado', 'activo').eq('alumno_id', alumnoId)
+    ])
+    if ((yaEsta.count || 0) > 0) {
+      alert('Esa persona ya está anotada en este horario ese mes.')
+      return
+    }
+    const anotados = regs.count || 0
+    const conRecupero = recs.count || 0
+    if (anotados + conRecupero >= slot.cupos) {
+      alert(`Ese día no hay cama libre: hay ${anotados} anotados y ${conRecupero} recuperos para el ${etiquetaFecha(fechaRecupero)}.`)
+      return
+    }
+    const { error } = await supabase.from('recuperos').insert({ alumno_id: alumnoId, horario_clase_id: slotId, fecha: fechaRecupero })
+    if (error) { alert('No se pudo guardar el recupero: ' + error.message); return }
+    setModal(null); setBusqueda(''); cargar()
+  }
+
+  async function confirmarBorrarRecupero() {
+    if (!confirmarRecupero) return
+    await supabase.from('recuperos').delete().eq('id', confirmarRecupero.id)
+    setConfirmarRecupero(null)
+    cargar()
   }
 
   async function crearYAsignar(slotId, nombre) {
@@ -289,6 +383,10 @@ export default function Grilla() {
 
   const alumnosFiltrados = alumnosList.filter(a => a.nombre.toLowerCase().includes(busqueda.toLowerCase()))
   const hayCoincidenciaExacta = alumnosList.some(a => a.nombre.toLowerCase() === busqueda.trim().toLowerCase())
+
+  const otrosHorarios = horariosTodos
+    .filter(h => !(h.activo !== false && DIAS.includes(h.dia)))
+    .sort((a, b) => (DIAS.indexOf(a.dia) - DIAS.indexOf(b.dia)) || String(a.hora).localeCompare(String(b.hora)))
 
   const bloquesPorDia = DIAS.map(dia => {
     const horasLibres = horasUnicas
@@ -419,7 +517,7 @@ export default function Grilla() {
     reader.onload = () => {
       const img = new Image()
       img.onload = () => setFondoImg(img)
-      img.src = reader.result
+      img.src = reader.result as string
     }
     reader.readAsDataURL(file)
   }
@@ -451,16 +549,7 @@ export default function Grilla() {
         {esProfe ? (
           <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
         ) : (
-          <nav className="flex gap-4 flex-wrap items-center">
-            <a href="/" className="text-sm font-medium text-[#5C6F5D] border-b-2 border-[#5C6F5D] pb-0.5">Días y Horarios</a>
-            <a href="/cobranza" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cobranza</a>
-            <a href="/gastos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Gastos</a>
-            <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
-            <a href="/alumnos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Alumnos</a>
-            <a href="/dashboard" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Dashboard</a>
-            <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
-            <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
-          </nav>
+          <Menu activo="/" />
         )}
       </div>
 
@@ -523,6 +612,7 @@ export default function Grilla() {
                       const inscriptos = slot ? inscriptosDe(slot.id) : []
                       const libres = slot ? slot.cupos - inscriptos.length : 0
                       const espera = slot ? esperaDe(slot.id) : []
+                      const recs = slot ? recuperosDe(slot.id) : []
                       const cerrado = !slot || inscriptos.length === 0
 
                       if (esProfe) {
@@ -533,6 +623,11 @@ export default function Grilla() {
                               {inscriptos.map(i => (
                                 <span key={i.id} className="block w-full text-center rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1 truncate">
                                   {i.alumnos?.nombre}
+                                </span>
+                              ))}
+                              {recs.map(r => (
+                                <span key={r.id} className="block w-full text-center rounded-full border border-dashed border-[#8A6B2C] bg-[#FBF4E4] text-[#8A6B2C] text-[11px] px-2 py-0.5 truncate">
+                                  R {etiquetaFecha(r.fecha)} · {r.alumnos?.nombre}
                                 </span>
                               ))}
                               {!cerrado && libres > 0 && (
@@ -598,6 +693,24 @@ export default function Grilla() {
                                 </button>
                               </div>
                             ))}
+                            {recs.map(r => (
+                              <div key={r.id} className="group relative w-full">
+                                <span
+                                  onClick={e => e.stopPropagation()}
+                                  className="block text-center rounded-full border border-dashed border-[#8A6B2C] bg-[#FBF4E4] text-[#8A6B2C] text-[11px] px-2 py-0.5 truncate"
+                                  title={`Recupero del ${etiquetaFecha(r.fecha)} — ${r.alumnos?.nombre}`}
+                                >
+                                  R {etiquetaFecha(r.fecha)} · {r.alumnos?.nombre}
+                                </span>
+                                <button
+                                  onClick={ev => { ev.stopPropagation(); setConfirmarRecupero(r) }}
+                                  className="hidden group-hover:flex absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#B5504A] text-white text-[10px] items-center justify-center"
+                                  title="Sacar recupero"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
                             {Array.from({ length: libres > 0 ? libres : 0 }).map((_, idx) => (
                               <button
                                 key={idx}
@@ -640,6 +753,7 @@ export default function Grilla() {
                 const inscriptos = slot ? inscriptosDe(slot.id) : []
                 const libres = slot ? slot.cupos - inscriptos.length : 0
                 const espera = slot ? esperaDe(slot.id) : []
+                const recs = slot ? recuperosDe(slot.id) : []
                 const cerrado = !slot || inscriptos.length === 0
 
                 if (cerrado) {
@@ -676,6 +790,21 @@ export default function Grilla() {
                             className={`rounded-full bg-[#5C6F5D] text-white text-xs px-3 py-1 ${i.no_continua ? 'ring-2 ring-[#8A6B2C]' : ''}`}
                           >
                             {i.alumnos?.nombre}
+                          </button>
+                        )
+                      ))}
+                      {recs.map(r => (
+                        esProfe ? (
+                          <span key={r.id} className="rounded-full border border-dashed border-[#8A6B2C] bg-[#FBF4E4] text-[#8A6B2C] text-xs px-3 py-1">
+                            R {etiquetaFecha(r.fecha)} · {r.alumnos?.nombre}
+                          </span>
+                        ) : (
+                          <button
+                            key={r.id}
+                            onClick={() => setConfirmarRecupero(r)}
+                            className="rounded-full border border-dashed border-[#8A6B2C] bg-[#FBF4E4] text-[#8A6B2C] text-xs px-3 py-1"
+                          >
+                            R {etiquetaFecha(r.fecha)} · {r.alumnos?.nombre}
                           </button>
                         )
                       ))}
@@ -744,6 +873,35 @@ export default function Grilla() {
                 </tbody>
               </table>
             </div>
+
+            {otrosHorarios.length > 0 && (
+              <div className="mt-6 pt-5 border-t border-[#221F1B]/10">
+                <p className="text-sm font-medium text-[#221F1B] mb-1">Horarios que ya no están en la grilla</p>
+                <p className="text-xs text-[#8A8378] mb-3">
+                  Son horarios inactivos o que no caen de lunes a viernes. Si en meses anteriores hubo alumnos en alguno, asignale el profe de esa época para que las bajas se cuenten bien en Retención.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {otrosHorarios.map(h => (
+                    <div key={h.id} className="flex items-center justify-between gap-3 bg-[#F5F1E9] rounded-lg px-3 py-2">
+                      <span className="text-sm text-[#221F1B]">
+                        {h.dia} {formatHoraCompleta(h.hora)}{h.activo === false ? ' (inactivo)' : ''}
+                      </span>
+                      <select
+                        value={h.profe_id || ''}
+                        onChange={e => asignarProfe(h.id, e.target.value)}
+                        className="border border-[#221F1B]/15 rounded-lg px-2 py-1.5 text-xs bg-white outline-none focus:border-[#5C6F5D]"
+                      >
+                        <option value="">Sin asignar</option>
+                        {profes.map(p => (
+                          <option key={p.id} value={p.id}>{p.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end mt-4">
               <button onClick={() => setProfesModal(false)} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Listo</button>
             </div>
@@ -755,21 +913,70 @@ export default function Grilla() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => { setModal(null); setEsperaIdPendiente(null) }}>
           <div className="bg-white rounded-2xl p-5 w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-medium text-[#221F1B] mb-3">Anotar alumno</p>
-            <input autoFocus value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar o escribir nombre nuevo…" className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setModoAnotar('mes')}
+                className={`flex-1 px-3 py-1.5 rounded-full text-xs border ${modoAnotar === 'mes' ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}
+              >
+                Inscripción del mes
+              </button>
+              <button
+                onClick={() => setModoAnotar('recupero')}
+                className={`flex-1 px-3 py-1.5 rounded-full text-xs border ${modoAnotar === 'recupero' ? 'bg-[#8A6B2C] text-white border-[#8A6B2C]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}
+              >
+                Recupero (una clase)
+              </button>
+            </div>
+
+            {modoAnotar === 'recupero' && (
+              <div className="mb-3">
+                <label className="block text-xs text-[#8A8378] mb-1">Fecha del recupero</label>
+                <input
+                  type="date"
+                  value={fechaRecupero}
+                  onChange={e => setFechaRecupero(e.target.value)}
+                  className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#8A6B2C]"
+                />
+                <p className="text-[11px] text-[#8A8378] mt-1">
+                  Ocupa una cama solo ese día. No suma en cobranza ni en los horarios libres del mes.
+                </p>
+              </div>
+            )}
+
+            <input autoFocus value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={modoAnotar === 'recupero' ? 'Buscar alumno…' : 'Buscar o escribir nombre nuevo…'} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
             <div className="max-h-56 overflow-y-auto flex flex-col gap-1">
               {alumnosFiltrados.slice(0, 30).map(a => (
-                <button key={a.id} onClick={() => asignar(modal.slotId, a.id)} className="text-left text-sm px-3 py-2 rounded-lg hover:bg-[#F5F1E9] text-[#221F1B]">
+                <button
+                  key={a.id}
+                  onClick={() => modoAnotar === 'recupero' ? crearRecupero(modal.slotId, a.id) : asignar(modal.slotId, a.id)}
+                  className="text-left text-sm px-3 py-2 rounded-lg hover:bg-[#F5F1E9] text-[#221F1B]"
+                >
                   {a.nombre}
                 </button>
               ))}
-              {busqueda.trim() && !hayCoincidenciaExacta && (
+              {modoAnotar === 'mes' && busqueda.trim() && !hayCoincidenciaExacta && (
                 <button onClick={() => crearYAsignar(modal.slotId, busqueda)} className="text-left text-sm px-3 py-2 rounded-lg bg-[#F5F1E9] text-[#5C6F5D] font-medium mt-1">
                   + Crear alumno nuevo: &quot;{busqueda.trim()}&quot;
                 </button>
               )}
               {alumnosFiltrados.length === 0 && !busqueda.trim() && (
-                <p className="text-xs text-[#8A8378] px-3 py-2">Empezá a escribir para buscar o crear un alumno</p>
+                <p className="text-xs text-[#8A8378] px-3 py-2">Empezá a escribir para buscar {modoAnotar === 'mes' ? 'o crear ' : ''}un alumno</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmarRecupero && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setConfirmarRecupero(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center" onClick={e => e.stopPropagation()}>
+            <p className="text-sm text-[#221F1B] mb-6">
+              ¿Sacar el recupero de <span className="font-semibold">{confirmarRecupero.alumnos?.nombre}</span> del <span className="font-semibold">{etiquetaFecha(confirmarRecupero.fecha)}</span>?
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button onClick={() => setConfirmarRecupero(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
+              <button onClick={confirmarBorrarRecupero} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#B5504A] hover:bg-[#9C4340]">Sacar recupero</button>
             </div>
           </div>
         </div>
@@ -795,8 +1002,8 @@ export default function Grilla() {
 
       {ayudaAbierta && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setAyudaAbierta(false)}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-medium text-[#221F1B] mb-4">Cómo manejar altas y bajas entre meses</p>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-h-[88vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-4">Cómo manejar altas, bajas y recuperos</p>
 
             <div className="flex flex-col gap-4 mb-2">
               <div>
@@ -817,6 +1024,11 @@ export default function Grilla() {
               <div>
                 <p className="text-sm font-medium text-[#221F1B]/70 mb-1">4. "Traer inscriptos de [mes anterior]"</p>
                 <p className="text-sm text-[#221F1B]">Trae a todos los activos del mes anterior, salvo los marcados con el punto 3. Se puede usar en cualquier momento, no borra ni duplica a nadie que ya hayas anotado a mano.</p>
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-[#8A6B2C] mb-1">5. Recuperos (cápsulas punteadas con una R)</p>
+                <p className="text-sm text-[#221F1B]">Cuando alguien pide recuperar una clase, tocá un "+ Libre", elegí "Recupero (una clase)", la fecha y la persona. Ocupa una cama solo ese día: el sistema no deja anotar más recuperos que camas libres, así no se pisan entre ustedes. No suma en cobranza ni cambia los horarios libres del mes. Las profes lo ven en la grilla.</p>
               </div>
             </div>
 

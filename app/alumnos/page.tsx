@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../lib/supabase'
-import { getRol, cerrarSesion, ROLES } from '../lib/auth'
+import { getRol, ROLES } from '../lib/auth'
+import Menu from '../components/Menu'
 
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -35,6 +36,7 @@ const MOTIVOS_BAJA = [
 
 const BUCKETS = ['Estuvo 1 mes', '2 a 3 meses', '4 a 6 meses', '7 meses o más']
 const TABS = [['listado', 'Listado'], ['bajas', 'Bajas'], ['retencion', 'Retención'], ['perfil', 'Perfil']]
+const RANGOS = [['1', 'Último mes'], ['3', '3 meses'], ['6', '6 meses'], ['todo', 'Todo el historial'], ['custom', 'Elegir meses']]
 
 function mesActualISO() {
   const d = new Date()
@@ -149,7 +151,11 @@ export default function Alumnos() {
   const [rol, setRolState] = useState(null)
   const [tab, setTab] = useState('listado')
   const [mesStats, setMesStats] = useState(mesActualISO())
-  const [periodo, setPeriodo] = useState(3)
+  const [rango, setRango] = useState('3')
+  const [desdeCustom, setDesdeCustom] = useState('')
+  const [hastaCustom, setHastaCustom] = useState('')
+  const [vistaBajas, setVistaBajas] = useState('mes')
+  const [soloSinMotivo, setSoloSinMotivo] = useState(false)
   const [anioResumen, setAnioResumen] = useState(new Date().getFullYear())
   const [alumnos, setAlumnos] = useState([])
   const [cargando, setCargando] = useState(true)
@@ -263,9 +269,34 @@ export default function Alumnos() {
       .sort((a, b) => (DIAS.indexOf(a.dia) - DIAS.indexOf(b.dia)) || String(a.hora).localeCompare(String(b.hora)))
   }
 
+  // Meses que entran en el análisis de Retención, según el rango elegido
+  const mesesRango = useMemo(() => {
+    let inicio
+    let fin
+    if (rango === 'custom') {
+      inicio = desdeCustom ? `${desdeCustom}-01` : (modelo.primerMes || mesStats)
+      fin = hastaCustom ? `${hastaCustom}-01` : mesStats
+    } else if (rango === 'todo') {
+      inicio = modelo.primerMes || mesStats
+      fin = mesStats
+    } else {
+      inicio = desplazarMes(mesStats, -(Number(rango) - 1))
+      fin = mesStats
+    }
+    if (inicio > fin) { const t = inicio; inicio = fin; fin = t }
+    const out = []
+    let m = inicio
+    let guardia = 0
+    while (m <= fin && guardia < 240) {
+      out.push(m)
+      m = desplazarMes(m, 1)
+      guardia++
+    }
+    return out
+  }, [rango, desdeCustom, hastaCustom, mesStats, modelo.primerMes])
+
   const retencion = useMemo(() => {
-    const meses = []
-    for (let i = periodo - 1; i >= 0; i--) meses.push(desplazarMes(mesStats, -i))
+    const meses = mesesRango
     let sumBajas = 0
     let sumBase = 0
     let sumNuevosReales = 0
@@ -324,7 +355,7 @@ export default function Alumnos() {
       sumNuevosReales, sumReingresos, antig, censuradas,
       motivosCnt, bajasTotal, bajasConMotivo, porProfe
     }
-  }, [modelo, horariosMap, motivos, mesStats, periodo])
+  }, [modelo, horariosMap, motivos, mesesRango])
 
   const profeItems = useMemo(() => {
     const m = Math.max(1, retencion.mesesConDatos)
@@ -333,26 +364,35 @@ export default function Alumnos() {
       const nombre = k === 'sin'
         ? 'Sin profe asignado'
         : (profes.find(p => String(p.id) === k)?.nombre || 'Profe desconocido')
-      const extra = periodo === 1
+      const extra = retencion.mesesConDatos === 1
         ? `de ${d.base} alumnos`
         : `${(d.bajas / m).toFixed(1)} por mes, sobre ~${Math.round(d.base / m)} alumnos`
       return { key: k, label: nombre, bajas: d.bajas, base: d.base, pct: d.base > 0 ? (d.bajas / d.base) * 100 : 0, extra }
     })
-  }, [retencion, profes, periodo])
+  }, [retencion, profes])
 
   const profesPorCantidad = useMemo(
     () => [...profeItems].sort((a, b) => b.bajas - a.bajas).map(p => ({ label: p.label, valor: p.bajas, extra: p.extra })),
     [profeItems]
   )
   const profesPorPct = useMemo(
-    () => [...profeItems].sort((a, b) => b.pct - a.pct).map(p => ({ label: p.label, valor: p.pct, extra: `${p.bajas} bajas ${periodo === 1 ? '' : 'en total, '}${p.extra}`.replace('  ', ' ') })),
-    [profeItems, periodo]
+    () => [...profeItems].sort((a, b) => b.pct - a.pct).map(p => ({
+      label: p.label,
+      valor: p.pct,
+      extra: `${p.bajas} bajas${retencion.mesesConDatos === 1 ? '' : ' en total'}, ${p.extra}`
+    })),
+    [profeItems, retencion.mesesConDatos]
   )
 
-  const horariosSinProfe = useMemo(
-    () => Object.values(horariosMap).filter(h => h.activo !== false && !h.profe_id).length,
-    [horariosMap]
-  )
+  // Horarios que se usaron en algún mes y todavía no tienen profe asignado
+  const horariosUsadosSinProfe = useMemo(() => {
+    const ids = new Set()
+    inscTodas.forEach(r => {
+      const h = horariosMap[String(r.horario_clase_id)]
+      if (!h || !h.profe_id) ids.add(String(r.horario_clase_id))
+    })
+    return ids.size
+  }, [inscTodas, horariosMap])
 
   const serieAnual = useMemo(() => {
     return Array.from({ length: 12 }, (_, i) => {
@@ -364,21 +404,33 @@ export default function Alumnos() {
     })
   }, [modelo, anioResumen])
 
-  const listaBajas = useMemo(() => {
-    const t = transicionMes
-    if (!t) return null
-    return t.bajas.map(id => {
-      const a = alumnoPorId[String(id)]
-      const idsHorarios = modelo.porMes[t.prev][id] || []
-      return {
-        id,
-        nombre: a ? a.nombre : '(alumno eliminado)',
-        horarios: horariosDe(idsHorarios),
-        clases: idsHorarios.length,
-        racha: calcRacha(modelo, id, t.prev)
-      }
-    }).sort((x, y) => x.nombre.localeCompare(y.nombre))
-  }, [transicionMes, alumnoPorId, modelo, horariosMap])
+  // Lista de bajas: un solo mes o todo el historial
+  const bajasTodas = useMemo(() => {
+    const salida = []
+    const lista = vistaBajas === 'mes' ? [mesStats] : [...modelo.meses].reverse()
+    lista.forEach(mesBaja => {
+      const t = calcTransicion(modelo, mesBaja)
+      if (!t) return
+      t.bajas.forEach(id => {
+        const a = alumnoPorId[String(id)]
+        const idsHorarios = modelo.porMes[t.prev][id] || []
+        salida.push({
+          id,
+          mesBaja,
+          nombre: a ? a.nombre : '(alumno eliminado)',
+          horarios: horariosDe(idsHorarios),
+          clases: idsHorarios.length,
+          racha: calcRacha(modelo, id, t.prev)
+        })
+      })
+    })
+    salida.sort((x, y) => y.mesBaja.localeCompare(x.mesBaja) || x.nombre.localeCompare(y.nombre))
+    return salida
+  }, [vistaBajas, mesStats, modelo, alumnoPorId, horariosMap])
+
+  const hayDatosBajas = vistaBajas === 'mes' ? !!transicionMes : modelo.meses.length > 1
+  const bajasConMotivoCount = bajasTodas.filter(b => motivos[`${b.id}|${b.mesBaja}`]).length
+  const listaBajas = soloSinMotivo ? bajasTodas.filter(b => !motivos[`${b.id}|${b.mesBaja}`]) : bajasTodas
 
   async function guardarMotivo(alumnoId, mes, motivo, nota) {
     const key = `${alumnoId}|${mes}`
@@ -399,6 +451,8 @@ export default function Alumnos() {
   const labelMesStats = labelDeMes(mesStats)
   const labelPrevMesStats = labelDeMes(mesAnterior(mesStats))
   const labelPrimerMes = modelo.primerMes ? labelDeMes(modelo.primerMes) : ''
+  const labelInicioRango = mesesRango.length > 0 ? labelDeMes(mesesRango[0]) : ''
+  const labelFinRango = mesesRango.length > 0 ? labelDeMes(mesesRango[mesesRango.length - 1]) : ''
 
   const totalHistorico = alumnos.length
   const totalActivos = idsActivosHoy.size
@@ -463,11 +517,6 @@ export default function Alumnos() {
     cargarRetencion()
   }
 
-  function salir() {
-    cerrarSesion()
-    router.push('/login')
-  }
-
   const conteoGenero = {}
   const conteoCanal = {}
   let conGenero = 0
@@ -480,7 +529,7 @@ export default function Alumnos() {
   const pctCanal = totalHistorico > 0 ? Math.round((conCanal / totalHistorico) * 100) : 0
 
   const distribucionClases = {}
-  Object.values(clasesPorAlumno).forEach(c => { distribucionClases[c] = (distribucionClases[c] || 0) + 1 })
+  Object.values(clasesPorAlumno).forEach((c: any) => { distribucionClases[c] = (distribucionClases[c] || 0) + 1 })
   const clavesDistribucion = Object.keys(distribucionClases).map(Number).sort((a, b) => a - b)
 
   const horariosViendo = viendo ? horariosDe((modelo.porMes[mesStats] || {})[viendo.id]) : []
@@ -499,8 +548,6 @@ export default function Alumnos() {
     extra: `${Math.round((retencion.antig[b] / Math.max(1, retencion.bajasTotal)) * 100)}%`
   }))
 
-  const bajasConMotivoMes = listaBajas ? listaBajas.filter(b => motivos[`${b.id}|${mesStats}`]).length : 0
-
   if (!rol) return null
 
   return (
@@ -509,16 +556,7 @@ export default function Alumnos() {
         <p className="text-3xl md:text-4xl text-[#221F1B] tracking-wide" style={{ fontFamily: 'Georgia, serif', fontStyle: 'italic' }}>
           Romana Studio
         </p>
-        <nav className="flex gap-4 flex-wrap items-center">
-          <a href="/" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Días y Horarios</a>
-          <a href="/cobranza" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cobranza</a>
-          <a href="/gastos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Gastos</a>
-          <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
-          <a href="/alumnos" className="text-sm font-medium text-[#5C6F5D] border-b-2 border-[#5C6F5D] pb-0.5">Alumnos</a>
-          <a href="/dashboard" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Dashboard</a>
-          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
-          <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
-        </nav>
+        <Menu activo="/alumnos" />
       </div>
 
       <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-4">Alumnos</p>
@@ -657,80 +695,117 @@ export default function Alumnos() {
 
       {tab === 'bajas' && (
         <div>
-          <p className="text-sm font-medium text-[#221F1B] mb-1">Bajas de {labelMesStats}</p>
-          <p className="text-xs text-[#8A8378] mb-1">Iban en {labelPrevMesStats} y no figuran anotados en {labelMesStats}.</p>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <button
+              onClick={() => setVistaBajas('mes')}
+              className={`px-3 py-1 rounded-full text-xs border ${vistaBajas === 'mes' ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}
+            >
+              Solo {labelMesStats}
+            </button>
+            <button
+              onClick={() => setVistaBajas('todos')}
+              className={`px-3 py-1 rounded-full text-xs border ${vistaBajas === 'todos' ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}
+            >
+              Todo el historial
+            </button>
+            <label className="flex items-center gap-2 text-xs text-[#221F1B] ml-2 cursor-pointer">
+              <input type="checkbox" checked={soloSinMotivo} onChange={e => setSoloSinMotivo(e.target.checked)} />
+              Solo las que no tienen motivo
+            </label>
+          </div>
+
+          <p className="text-sm font-medium text-[#221F1B] mb-1">
+            {vistaBajas === 'mes' ? `Bajas de ${labelMesStats}` : 'Bajas de todos los meses'}
+          </p>
+          <p className="text-xs text-[#8A8378] mb-1">
+            {vistaBajas === 'mes'
+              ? `Iban en ${labelPrevMesStats} y no figuran anotados en ${labelMesStats}.`
+              : 'Cada baja figura en el mes en que dejó de aparecer anotado.'}
+          </p>
           <p className="text-xs text-[#8A8378] mb-5">
-            Ojo: si {labelMesStats} todavía no está completo en la grilla (por ejemplo, antes de usar &quot;Traer inscriptos&quot;), van a aparecer bajas de más.
+            Ojo: si un mes todavía no está completo en la grilla (por ejemplo, antes de usar &quot;Traer inscriptos&quot;), van a aparecer bajas de más.
           </p>
 
           {cargandoRet ? (
             <p className="text-sm text-[#8A8378]">Cargando…</p>
-          ) : !listaBajas ? (
-            <p className="text-sm text-[#8A8378]">No hay datos de {labelMesStats} o de {labelPrevMesStats} para comparar.</p>
-          ) : listaBajas.length === 0 ? (
-            <p className="text-sm text-[#8A8378]">Nadie dejó entre {labelPrevMesStats} y {labelMesStats}.</p>
+          ) : !hayDatosBajas ? (
+            <p className="text-sm text-[#8A8378]">No hay datos suficientes para comparar con el mes anterior.</p>
+          ) : bajasTodas.length === 0 ? (
+            <p className="text-sm text-[#8A8378]">No hay bajas en este período.</p>
           ) : (
             <>
-              <p className="text-xs text-[#8A8378] mb-3">{bajasConMotivoMes} de {listaBajas.length} con motivo cargado</p>
-              <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 overflow-hidden overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
-                      <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Alumno</th>
-                      <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Estuvo</th>
-                      <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Clases/sem</th>
-                      <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Horarios y profe</th>
-                      <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Motivo</th>
-                      <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {listaBajas.map(b => {
-                      const key = `${b.id}|${mesStats}`
-                      const m = motivos[key]
-                      const opciones = m && !MOTIVOS_BAJA.includes(m.motivo) ? [...MOTIVOS_BAJA, m.motivo] : MOTIVOS_BAJA
-                      return (
-                        <tr key={b.id} className="border-b border-[#221F1B]/8 last:border-0 align-top">
-                          <td className="px-4 py-3 text-sm text-[#221F1B]">{b.nombre}</td>
-                          <td className="px-4 py-3 text-sm text-center text-[#221F1B] whitespace-nowrap">
-                            {b.racha.meses}{b.racha.censurado ? '+' : ''} {b.racha.meses === 1 ? 'mes' : 'meses'}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{b.clases}</td>
-                          <td className="px-4 py-3 text-xs text-[#221F1B]">
-                            <div className="flex flex-col gap-0.5">
-                              {b.horarios.map(h => (
-                                <span key={h.id}>
-                                  {String(h.dia).slice(0, 3)} {formatHora(h.hora)}{nombreProfeDe(h) ? ` · ${nombreProfeDe(h)}` : ''}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <select
-                              value={m ? m.motivo : ''}
-                              onChange={e => guardarMotivo(b.id, mesStats, e.target.value, m ? m.nota : '')}
-                              className="border border-[#221F1B]/15 rounded-lg px-2 py-1.5 text-sm bg-white outline-none focus:border-[#5C6F5D]"
-                            >
-                              <option value="">Sin motivo cargado</option>
-                              {opciones.map(o => <option key={o} value={o}>{o}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              key={key + (m ? m.nota : '')}
-                              defaultValue={m ? m.nota : ''}
-                              disabled={!m}
-                              placeholder={m ? 'Nota (opcional)' : 'Elegí un motivo primero'}
-                              onBlur={e => { if (m && e.target.value !== (m.nota || '')) guardarMotivo(b.id, mesStats, m.motivo, e.target.value) }}
-                              className="w-full min-w-[160px] border border-[#221F1B]/15 rounded-lg px-2 py-1.5 text-sm bg-white outline-none focus:border-[#5C6F5D] disabled:bg-[#F5F1E9]"
-                            />
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <p className="text-xs text-[#8A8378] mb-3">{bajasConMotivoCount} de {bajasTodas.length} con motivo cargado</p>
+              {listaBajas.length === 0 ? (
+                <p className="text-sm text-[#5C6F5D]">Todas tienen motivo cargado.</p>
+              ) : (
+                <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 overflow-hidden overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
+                        {vistaBajas === 'todos' && (
+                          <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Mes</th>
+                        )}
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Alumno</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Estuvo</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B]">Clases/sem</th>
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Horarios y profe</th>
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Motivo</th>
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Nota</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {listaBajas.map(b => {
+                        const key = `${b.id}|${b.mesBaja}`
+                        const m = motivos[key]
+                        const opciones = m && !MOTIVOS_BAJA.includes(m.motivo) ? [...MOTIVOS_BAJA, m.motivo] : MOTIVOS_BAJA
+                        return (
+                          <tr key={key} className="border-b border-[#221F1B]/8 last:border-0 align-top">
+                            {vistaBajas === 'todos' && (
+                              <td className="px-4 py-3 text-sm text-[#8A8378] whitespace-nowrap">
+                                {MESES_CORTOS[Number(b.mesBaja.slice(5, 7)) - 1]} {b.mesBaja.slice(0, 4)}
+                              </td>
+                            )}
+                            <td className="px-4 py-3 text-sm text-[#221F1B]">{b.nombre}</td>
+                            <td className="px-4 py-3 text-sm text-center text-[#221F1B] whitespace-nowrap">
+                              {b.racha.meses}{b.racha.censurado ? '+' : ''} {b.racha.meses === 1 ? 'mes' : 'meses'}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{b.clases}</td>
+                            <td className="px-4 py-3 text-xs text-[#221F1B]">
+                              <div className="flex flex-col gap-0.5">
+                                {b.horarios.map(h => (
+                                  <span key={h.id}>
+                                    {String(h.dia).slice(0, 3)} {formatHora(h.hora)}{nombreProfeDe(h) ? ` · ${nombreProfeDe(h)}` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={m ? m.motivo : ''}
+                                onChange={e => guardarMotivo(b.id, b.mesBaja, e.target.value, m ? m.nota : '')}
+                                className="border border-[#221F1B]/15 rounded-lg px-2 py-1.5 text-sm bg-white outline-none focus:border-[#5C6F5D]"
+                              >
+                                <option value="">Sin motivo cargado</option>
+                                {opciones.map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-4 py-3">
+                              <input
+                                key={key + (m ? m.nota : '')}
+                                defaultValue={m ? m.nota : ''}
+                                disabled={!m}
+                                placeholder={m ? 'Nota (opcional)' : 'Elegí un motivo primero'}
+                                onBlur={e => { if (m && e.target.value !== (m.nota || '')) guardarMotivo(b.id, b.mesBaja, m.motivo, e.target.value) }}
+                                className="w-full min-w-[160px] border border-[#221F1B]/15 rounded-lg px-2 py-1.5 text-sm bg-white outline-none focus:border-[#5C6F5D] disabled:bg-[#F5F1E9]"
+                              />
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -738,26 +813,52 @@ export default function Alumnos() {
 
       {tab === 'retencion' && (
         <div>
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="text-xs text-[#8A8378]">Período:</span>
-            {[[1, 'Último mes'], [3, '3 meses'], [6, '6 meses']].map(([v, l]) => (
+            {RANGOS.map(([v, l]) => (
               <button
                 key={v}
-                onClick={() => setPeriodo(v)}
-                className={`px-3 py-1 rounded-full text-xs border ${periodo === v ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}
+                onClick={() => setRango(v)}
+                className={`px-3 py-1 rounded-full text-xs border ${rango === v ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}
               >
                 {l}
               </button>
             ))}
           </div>
+
+          {rango === 'custom' && (
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
+              <label className="flex items-center gap-2 text-xs text-[#8A8378]">
+                Desde
+                <input
+                  type="month"
+                  value={desdeCustom}
+                  onChange={e => setDesdeCustom(e.target.value)}
+                  className="border border-[#221F1B]/15 rounded-lg px-2 py-1 text-sm bg-white outline-none focus:border-[#5C6F5D]"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs text-[#8A8378]">
+                Hasta
+                <input
+                  type="month"
+                  value={hastaCustom}
+                  onChange={e => setHastaCustom(e.target.value)}
+                  className="border border-[#221F1B]/15 rounded-lg px-2 py-1 text-sm bg-white outline-none focus:border-[#5C6F5D]"
+                />
+              </label>
+            </div>
+          )}
+
           <p className="text-xs text-[#8A8378] mb-5">
-            Hasta {labelMesStats}{retencion.mesesConDatos < periodo ? ` — solo ${retencion.mesesConDatos} mes(es) con datos para comparar` : ''}
+            De {labelInicioRango} a {labelFinRango}
+            {retencion.mesesConDatos < mesesRango.length ? ` — ${retencion.mesesConDatos} mes(es) con datos para comparar` : ''}
+            {rango !== 'custom' ? '. Los períodos cuentan hacia atrás desde el mes elegido arriba a la derecha.' : ''}
           </p>
 
           {cargandoRet ? (
             <p className="text-sm text-[#8A8378]">Cargando…</p>
           ) : retencion.mesesConDatos === 0 ? (
-            <p className="text-sm text-[#8A8378]">No hay meses consecutivos con datos para calcular. Probá moverte a otro mes arriba a la derecha.</p>
+            <p className="text-sm text-[#8A8378]">No hay meses consecutivos con datos para calcular en este período. Probá con otro rango.</p>
           ) : (
             <>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -765,14 +866,14 @@ export default function Alumnos() {
                   <p className="text-xs text-[#8A8378] mb-1">Churn mensual</p>
                   <p className="text-3xl font-semibold text-[#B5504A]">{retencion.churn !== null ? `${retencion.churn.toFixed(1)}%` : '—'}</p>
                   <p className="text-[11px] text-[#8A8378] mt-1">
-                    {periodo === 1 ? `${retencion.sumBajas} bajas de ${retencion.sumBase} alumnos` : 'promedio mensual del período'}
+                    {retencion.mesesConDatos === 1 ? `${retencion.sumBajas} bajas de ${retencion.sumBase} alumnos` : 'promedio mensual del período'}
                   </p>
                 </div>
                 <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-4">
                   <p className="text-xs text-[#8A8378] mb-1">Bajas</p>
                   <p className="text-3xl font-semibold text-[#221F1B]">{retencion.sumBajas}</p>
                   <p className="text-[11px] text-[#8A8378] mt-1">
-                    {periodo === 1 ? 'en el mes' : `${(retencion.sumBajas / Math.max(1, retencion.mesesConDatos)).toFixed(1)} por mes`}
+                    {retencion.mesesConDatos === 1 ? 'en el mes' : `${(retencion.sumBajas / Math.max(1, retencion.mesesConDatos)).toFixed(1)} por mes`}
                   </p>
                 </div>
                 <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-4">
@@ -821,13 +922,13 @@ export default function Alumnos() {
               <div className="mb-3">
                 <p className="text-sm font-medium text-[#221F1B] mb-1">Bajas por profe</p>
                 <p className="text-xs text-[#8A8378]">
-                  Se cuenta cada alumno que tenía al menos una clase con ese profe. Quien tenía clases con dos profes cuenta en los dos.
+                  Se cuenta cada alumno que tenía al menos una clase con ese profe. Quien tenía clases con dos profes cuenta en los dos. Con pocas bajas por profe, las diferencias chicas entre porcentajes no son concluyentes.
                 </p>
               </div>
 
-              {horariosSinProfe > 0 && (
+              {horariosUsadosSinProfe > 0 && (
                 <div className="mb-4 bg-[#FBF4E4] border border-[#8A6B2C]/20 rounded-xl px-4 py-3 text-xs text-[#8A6B2C]">
-                  Hay {horariosSinProfe} horarios sin profe asignado, así que esos alumnos figuran como &quot;Sin profe asignado&quot;. Asignalos en <a href="/" className="underline font-medium">Días y Horarios</a> → &quot;Profes por horario&quot;.
+                  Hay {horariosUsadosSinProfe} horarios usados en algún mes que todavía no tienen profe (incluye horarios que ya no están en la grilla), así que esos alumnos figuran como &quot;Sin profe asignado&quot;. Asignalos en <a href="/" className="underline font-medium">Días y Horarios</a> → &quot;Profes por horario&quot;, abajo de todo en &quot;Horarios que ya no están en la grilla&quot;.
                 </div>
               )}
 

@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../lib/supabase'
-import { getRol, cerrarSesion, ROLES } from '../lib/auth'
+import { getRol, ROLES } from '../lib/auth'
+import Menu from '../components/Menu'
 
 const NOMBRES_MES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
@@ -34,8 +35,10 @@ export default function Dashboard() {
   const [ingresoProyectado, setIngresoProyectado] = useState(0)
   const [ingresoReal, setIngresoReal] = useState(0)
   const [egresoReal, setEgresoReal] = useState(0)
+  const [egresoProyectado, setEgresoProyectado] = useState(0)
   const [vencidos, setVencidos] = useState(0)
   const [gastosSinPagar, setGastosSinPagar] = useState(0)
+  const [gastosSinMonto, setGastosSinMonto] = useState(0)
 
   useEffect(() => {
     const r = getRol()
@@ -109,8 +112,12 @@ export default function Dashboard() {
     const { data: gastosMes } = await supabase
       .from('gastos').select('*')
       .gte('fecha', mes).lt('fecha', finMesISO)
-    setEgresoReal((gastosMes || []).filter(g => g.estado === 'Pagado').reduce((acc, g) => acc + Number(g.monto), 0))
-    setGastosSinPagar((gastosMes || []).filter(g => g.estado === 'Proyectado').length)
+    const lista = gastosMes || []
+    const sinMonto = g => g.monto === null || g.monto === undefined
+    setEgresoReal(lista.filter(g => g.estado === 'Pagado').reduce((acc, g) => acc + Number(g.monto), 0))
+    setEgresoProyectado(lista.filter(g => g.estado === 'Proyectado').reduce((acc, g) => acc + (Number(g.monto) || 0), 0))
+    setGastosSinPagar(lista.filter(g => g.estado === 'Proyectado' && !sinMonto(g)).length)
+    setGastosSinMonto(lista.filter(g => g.estado === 'Proyectado' && sinMonto(g)).length)
 
     setCargando(false)
   }, [mes])
@@ -126,14 +133,10 @@ export default function Dashboard() {
   const labelMes = `${NOMBRES_MES[mesNum - 1]} ${anio}`
 
   const resultadoMes = ingresoReal - egresoReal
-  const hayAlertas = vencidos > 0 || gastosSinPagar > 0
+  const resultadoProyectado = ingresoProyectado - (egresoReal + egresoProyectado)
+  const hayAlertas = vencidos > 0 || gastosSinPagar > 0 || gastosSinMonto > 0
   const netoAlumnos = alumnosNuevos - alumnosBajas
   const porcentajeCobrado = ingresoProyectado > 0 ? Math.round((ingresoReal / ingresoProyectado) * 100) : 0
-
-  function salir() {
-    cerrarSesion()
-    router.push('/login')
-  }
 
   if (!rol) return null
 
@@ -143,16 +146,7 @@ export default function Dashboard() {
         <p className="text-3xl md:text-4xl text-[#221F1B] tracking-wide" style={{ fontFamily: 'Georgia, serif', fontStyle: 'italic' }}>
           Romana Studio
         </p>
-        <nav className="flex gap-4 flex-wrap items-center">
-          <a href="/" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Días y Horarios</a>
-          <a href="/cobranza" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cobranza</a>
-          <a href="/gastos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Gastos</a>
-          <a href="/finanzas" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Finanzas</a>
-          <a href="/alumnos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Alumnos</a>
-          <a href="/dashboard" className="text-sm font-medium text-[#5C6F5D] border-b-2 border-[#5C6F5D] pb-0.5">Dashboard</a>
-          <a href="/proyectos" className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Proyectos</a>
-          <button onClick={salir} className="text-sm font-medium text-[#8A8378] hover:text-[#221F1B]">Cerrar sesión</button>
-        </nav>
+        <Menu activo="/dashboard" />
       </div>
 
       <div className="flex items-center gap-3 mb-2">
@@ -177,6 +171,11 @@ export default function Dashboard() {
               {gastosSinPagar > 0 && (
                 <a href="/gastos" className="text-sm text-[#B5504A] font-medium hover:underline">
                   {gastosSinPagar} {gastosSinPagar === 1 ? 'gasto proyectado sin pagar' : 'gastos proyectados sin pagar'} →
+                </a>
+              )}
+              {gastosSinMonto > 0 && (
+                <a href="/gastos" className="text-sm text-[#B5504A] font-medium hover:underline">
+                  {gastosSinMonto} {gastosSinMonto === 1 ? 'gasto sin monto cargado' : 'gastos sin monto cargado'} (el proyectado todavía no los suma) →
                 </a>
               )}
             </div>
@@ -206,6 +205,10 @@ export default function Dashboard() {
               <p className="text-xs text-[#8A8378] mb-1">Resultado del mes</p>
               <p className={`text-2xl font-semibold ${resultadoMes >= 0 ? 'text-[#5C6F5D]' : 'text-[#B5504A]'}`}>
                 ${resultadoMes.toLocaleString('es-AR')}
+              </p>
+              <p className="text-xs text-[#8A8378] mt-1">real (cobrado − pagado)</p>
+              <p className={`text-xs ${resultadoProyectado >= 0 ? 'text-[#5C6F5D]' : 'text-[#B5504A]'}`}>
+                proyectado ${resultadoProyectado.toLocaleString('es-AR')}
               </p>
             </div>
           </div>
