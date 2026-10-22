@@ -17,6 +17,10 @@ function mesAnterior(mes) {
   return `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-01`
 }
 
+function fechaMostrada(g) {
+  return g.estado === 'Pagado' && g.fecha_pago ? g.fecha_pago : g.fecha
+}
+
 function hoyISO() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -194,12 +198,12 @@ export default function Gastos() {
 
   function compararGastos(a, b) {
     let va, vb
-    if (ordenPor === 'fecha') { va = a.fecha; vb = b.fecha }
+    if (ordenPor === 'fecha') { va = fechaMostrada(a); vb = fechaMostrada(b) }
     else if (ordenPor === 'concepto') { va = a.concepto.toLowerCase(); vb = b.concepto.toLowerCase() }
     else if (ordenPor === 'categoria') { va = esSueldo(a) ? 'Sueldo' : a.categoria; vb = esSueldo(b) ? 'Sueldo' : b.categoria }
     else if (ordenPor === 'estado') { va = a.estado; vb = b.estado }
     else if (ordenPor === 'monto') { va = Number(a.monto) || 0; vb = Number(b.monto) || 0 }
-    else { va = a.fecha; vb = b.fecha }
+    else { va = fechaMostrada(a); vb = fechaMostrada(b) }
     if (va < vb) return ordenAsc ? -1 : 1
     if (va > vb) return ordenAsc ? 1 : -1
     return 0
@@ -438,12 +442,7 @@ export default function Gastos() {
                 const sinMonto = g.monto === null || g.monto === undefined
                 return (
                   <tr key={g.id} className={`border-b border-[#221F1B]/8 last:border-0 hover:bg-[#F5F1E9] ${g.estado === 'Proyectado' ? 'bg-[#FBF4E4]' : ''}`}>
-                    <td className="px-4 py-3 text-sm text-[#221F1B]">
-                      {g.fecha}
-                      {g.estado === 'Pagado' && g.fecha_pago && g.fecha_pago !== g.fecha && (
-                        <div className="text-[11px] text-[#8A8378]">pagado el {g.fecha_pago.slice(8, 10)}/{g.fecha_pago.slice(5, 7)}</div>
-                      )}
-                    </td>
+                    <td className="px-4 py-3 text-sm text-[#221F1B]">{fechaMostrada(g)}</td>
                     <td className="px-4 py-3 text-sm text-[#221F1B]">{g.concepto}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`text-xs px-2 py-1 rounded-full ${esSueldo(g) ? 'bg-[#8A6B2C] text-white' : g.categoria === 'Fijo' ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
