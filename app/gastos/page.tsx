@@ -42,6 +42,7 @@ export default function Gastos() {
   const [modal, setModal] = useState(null)
   const [modo, setModo] = useState('simple')
   const [fechaForm, setFechaForm] = useState(hoyISO())
+  const [fechaPagoForm, setFechaPagoForm] = useState(hoyISO())
   const [conceptoForm, setConceptoForm] = useState('')
   const [categoriaForm, setCategoriaForm] = useState('Variable')
   const [montoForm, setMontoForm] = useState('')
@@ -218,6 +219,7 @@ export default function Gastos() {
     setModal({})
     setModo('simple')
     setFechaForm(mes)
+    setFechaPagoForm(hoyISO())
     setConceptoForm('')
     setCategoriaForm('Variable')
     setMontoForm('')
@@ -237,6 +239,7 @@ export default function Gastos() {
     const sueldo = esSueldo(g)
     setModo(sueldo ? 'sueldo' : 'simple')
     setFechaForm(g.fecha)
+    setFechaPagoForm(g.fecha_pago || hoyISO())
     setConceptoForm(g.concepto)
     setCategoriaForm(g.categoria)
     setMontoForm(g.monto !== null && g.monto !== undefined ? String(g.monto) : '')
@@ -281,6 +284,7 @@ export default function Gastos() {
       if (!profe || !horasForm) { alert('Completá el profe y las horas'); return }
       payload = {
         fecha: fechaForm,
+        fecha_pago: estadoForm === 'Pagado' ? fechaPagoForm : null,
         concepto: `Sueldo ${profe.nombre} (${horasForm}hs)`,
         categoria: 'Variable',
         monto: montoCalculadoSueldo,
@@ -295,6 +299,7 @@ export default function Gastos() {
       if (!conceptoForm.trim() || !montoForm) { alert('Completá concepto y monto'); return }
       payload = {
         fecha: fechaForm,
+        fecha_pago: estadoForm === 'Pagado' ? fechaPagoForm : null,
         concepto: conceptoForm.trim(),
         categoria: categoriaForm,
         monto: parseFloat(montoForm) || 0,
@@ -433,7 +438,12 @@ export default function Gastos() {
                 const sinMonto = g.monto === null || g.monto === undefined
                 return (
                   <tr key={g.id} className={`border-b border-[#221F1B]/8 last:border-0 hover:bg-[#F5F1E9] ${g.estado === 'Proyectado' ? 'bg-[#FBF4E4]' : ''}`}>
-                    <td className="px-4 py-3 text-sm text-[#221F1B]">{g.fecha}</td>
+                    <td className="px-4 py-3 text-sm text-[#221F1B]">
+                      {g.fecha}
+                      {g.estado === 'Pagado' && g.fecha_pago && g.fecha_pago !== g.fecha && (
+                        <div className="text-[11px] text-[#8A8378]">pagado el {g.fecha_pago.slice(8, 10)}/{g.fecha_pago.slice(5, 7)}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-[#221F1B]">{g.concepto}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`text-xs px-2 py-1 rounded-full ${esSueldo(g) ? 'bg-[#8A6B2C] text-white' : g.categoria === 'Fijo' ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
@@ -503,8 +513,15 @@ export default function Gastos() {
               &quot;Proyectado&quot; = sabés que lo vas a pagar (ej. el alquiler antes de transferirlo) — no suma en la plata que ya salió, sí en la proyección del mes.
             </p>
 
-            <label className="block text-xs text-[#8A8378] mb-1">Fecha</label>
+            <label className="block text-xs text-[#8A8378] mb-1">{estadoForm === 'Pagado' ? 'Fecha del gasto (define a qué mes pertenece)' : 'Fecha del gasto'}</label>
             <input type="date" value={fechaForm} onChange={e => setFechaForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+
+            {estadoForm === 'Pagado' && (
+              <>
+                <label className="block text-xs text-[#8A8378] mb-1">Fecha en que se pagó</label>
+                <input type="date" value={fechaPagoForm} onChange={e => setFechaPagoForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
+              </>
+            )}
 
             {modo === 'simple' ? (
               <>
