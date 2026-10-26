@@ -56,7 +56,7 @@ export default function Dashboard() {
 
     const { data: inscMes } = await supabase
       .from('inscripciones')
-      .select('alumno_id, alumnos(id, clases_semana, exento_pago)')
+      .select('alumno_id, horario_clase_id, alumnos(id, clases_semana, exento_pago)')
       .eq('mes', mes).eq('estado', 'activo')
     const { data: inscPrevio } = await supabase
       .from('inscripciones').select('alumno_id')
@@ -68,8 +68,10 @@ export default function Dashboard() {
     setAlumnosNuevos([...idsMes].filter(id => !idsPrevio.has(id)).length)
     setAlumnosBajas([...idsPrevio].filter(id => !idsMes.has(id)).length)
 
-    const { data: horarios } = await supabase.from('horarios_clase').select('cupos').eq('activo', true)
-    const cuposTotales = (horarios || []).reduce((acc, h) => acc + h.cupos, 0)
+    // Igual que la grilla y "Disponibilidad": un horario sin nadie anotado en el mes está cerrado y no cuenta.
+    const { data: horarios } = await supabase.from('horarios_clase').select('id, cupos').eq('activo', true)
+    const horariosAbiertos = new Set((inscMes || []).map(i => i.horario_clase_id))
+    const cuposTotales = (horarios || []).filter(h => horariosAbiertos.has(h.id)).reduce((acc, h) => acc + h.cupos, 0)
     const ocupadas = (inscMes || []).length
     setOcupacion(cuposTotales > 0 ? Math.round((ocupadas / cuposTotales) * 100) : 0)
 
