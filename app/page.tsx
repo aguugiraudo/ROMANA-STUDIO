@@ -73,6 +73,8 @@ export default function Grilla() {
   const [horarios, setHorarios] = useState([])
   const [horariosTodos, setHorariosTodos] = useState([])
   const [inscripciones, setInscripciones] = useState([])
+  const [inscProx, setInscProx] = useState([])
+  const [ofrecerPara, setOfrecerPara] = useState(() => (new Date().getDate() >= 20 ? 'prox' : 'este'))
   const [recuperos, setRecuperos] = useState([])
   const [alumnosList, setAlumnosList] = useState([])
   const [listaEspera, setListaEspera] = useState([])
@@ -132,6 +134,11 @@ export default function Grilla() {
       .from('inscripciones').select('*, alumnos(nombre)')
       .eq('mes', mes).eq('estado', 'activo')
     setInscripciones(i || [])
+
+    const { data: ip } = await supabase
+      .from('inscripciones').select('alumno_id, horario_clase_id')
+      .eq('mes', finMesISO).eq('estado', 'activo')
+    setInscProx(ip || [])
 
     const { data: rec } = await supabase
       .from('recuperos').select('*, alumnos(nombre)')
@@ -226,6 +233,30 @@ export default function Grilla() {
 
   function getSlot(dia, hora) { return horarios.find(h => h.dia === dia && h.hora === hora) }
   function inscriptosDe(slotId) { return inscripciones.filter(i => i.horario_clase_id === slotId) }
+
+  // Proyección del mes siguiente: los de este mes que siguen (no marcados "No continúa")
+  // más los que ya fueron anotados directo en el mes siguiente. Sin contar dos veces a nadie.
+  const mesSig = (() => {
+    const [yy, mm] = mes.split('-').map(Number)
+    const f = new Date(yy, mm, 1)
+    return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-01`
+  })()
+  const nombreMesSig = NOMBRES_MES[Number(mesSig.split('-')[1]) - 1]
+  const labelMesSig = `${nombreMesSig} ${mesSig.split('-')[0]}`
+  const noContinuanSet = new Set(inscripciones.filter(i => i.no_continua).map(i => i.alumno_id))
+  function ocupantesProx(slotId) {
+    const ids = new Set()
+    inscripciones.filter(i => i.horario_clase_id === slotId && !noContinuanSet.has(i.alumno_id)).forEach(i => ids.add(i.alumno_id))
+    inscProx.filter(i => i.horario_clase_id === slotId).forEach(i => ids.add(i.alumno_id))
+    return ids.size
+  }
+  function libresProx(slot) { return slot.cupos - ocupantesProx(slot.id) }
+  function reservadasDe(slot, libres) {
+    if (libres <= 0) return 0
+    return Math.min(libres, Math.max(0, libres - libresProx(slot)))
+  }
+  const ofertaProx = ofrecerPara === 'prox'
+  const labelOferta = ofertaProx ? labelMesSig : labelMes
   function esperaDe(slotId) { return listaEspera.filter(e => e.horario_clase_id === slotId) }
   function recuperosDe(slotId) {
     return recuperos
@@ -393,10 +424,9 @@ export default function Grilla() {
       .filter(hora => {
         const slot = getSlot(dia, hora)
         if (!slot) return false
-        const inscriptos = inscriptosDe(slot.id)
-        if (inscriptos.length === 0) return false
-        const libres = slot.cupos - inscriptos.length
-        return libres >= camasConsulta
+        const ocupantes = ofertaProx ? ocupantesProx(slot.id) : inscriptosDe(slot.id).length
+        if (ocupantes === 0) return false
+        return slot.cupos - ocupantes >= camasConsulta
       })
       .map(formatHoraCompleta)
     return { dia, horasLibres }
@@ -425,9 +455,9 @@ export default function Grilla() {
       .filter(hora => {
         const slot = getSlot(dia, hora)
         if (!slot) return false
-        const inscriptos = inscriptosDe(slot.id)
-        if (inscriptos.length === 0) return false
-        return slot.cupos - inscriptos.length >= 1
+        const ocupantes = ofertaProx ? ocupantesProx(slot.id) : inscriptosDe(slot.id).length
+        if (ocupantes === 0) return false
+        return slot.cupos - ocupantes >= 1
       })
       .map(formatHoraCompleta)
     return { dia, horasLibres }
@@ -508,7 +538,7 @@ export default function Grilla() {
     ctx.fillText(direccionForm.toUpperCase(), W / 2, footerY)
     ctx.font = '600 30px sans-serif'
     ctx.fillText(telefonoForm, W / 2, footerY + 48)
-  }, [placaAbierta, bloquesPlaca, labelMes, fondoImg, logoImg, direccionForm, telefonoForm])
+  }, [placaAbierta, bloquesPlaca, labelOferta, fondoImg, logoImg, direccionForm, telefonoForm])
 
   function onFondoChange(e) {
     const file = e.target.files?.[0]
@@ -526,7 +556,7 @@ export default function Grilla() {
     const canvas = canvasRef.current
     if (!canvas) return
     const link = document.createElement('a')
-    link.download = `cupos-${labelMes.toLowerCase().replace(' ', '-')}.png`
+    link.download = `cupos-${labelOferta.toLowerCase().replace(' ', '-')}.png`
     link.href = canvas.toDataURL('image/png')
     link.click()
   }
@@ -711,20 +741,30 @@ export default function Grilla() {
                                 </button>
                               </div>
                             ))}
-                            {Array.from({ length: libres > 0 ? libres : 0 }).map((_, idx) => (
-                              <button
-                                key={idx}
-                                onClick={ev => { ev.stopPropagation(); setModal({ slotId: slot.id }) }}
-                                title={espera.length > 0 ? `${espera[0].alumno_nombre} está esperando este cupo — avisale` : undefined}
-                                className={`w-full text-center rounded-full border text-xs px-3 py-1 transition-colors ${
-                                  espera.length > 0
-                                    ? 'border-[#8A6B2C] text-[#8A6B2C] border-dashed'
-                                    : 'border-dashed border-[#221F1B]/20 text-[#8A8378] hover:border-[#5C6F5D] hover:text-[#5C6F5D]'
-                                }`}
-                              >
-                                + Libre
-                              </button>
-                            ))}
+                            {Array.from({ length: libres > 0 ? libres : 0 }).map((_, idx) => {
+                              const reservada = idx >= libres - reservadasDe(slot, libres)
+                              return (
+                                <button
+                                  key={idx}
+                                  onClick={ev => { ev.stopPropagation(); setModal({ slotId: slot.id }) }}
+                                  title={reservada ? `Ya está ocupada desde ${nombreMesSig}: no la ofrezcas` : espera.length > 0 ? `${espera[0].alumno_nombre} está esperando este cupo — avisale` : undefined}
+                                  className={`w-full text-center rounded-full border text-xs px-3 py-1 transition-colors ${
+                                    reservada
+                                      ? 'border-[#8A6B2C]/60 bg-[#FBF4E4] text-[#8A6B2C] border-dashed'
+                                      : espera.length > 0
+                                        ? 'border-[#8A6B2C] text-[#8A6B2C] border-dashed'
+                                        : 'border-dashed border-[#221F1B]/20 text-[#8A8378] hover:border-[#5C6F5D] hover:text-[#5C6F5D]'
+                                  }`}
+                                >
+                                  {reservada ? `Ocupada desde ${nombreMesSig}` : '+ Libre'}
+                                </button>
+                              )
+                            })}
+                            {libresProx(slot) !== libres && (
+                              <span className="text-[11px] text-[#8A6B2C]">
+                                desde {nombreMesSig}: {Math.max(0, libresProx(slot))} libre{Math.max(0, libresProx(slot)) === 1 ? '' : 's'}
+                              </span>
+                            )}
                           </div>
                         </td>
                       )
@@ -808,15 +848,23 @@ export default function Grilla() {
                           </button>
                         )
                       ))}
-                      {!esProfe && Array.from({ length: libres > 0 ? libres : 0 }).map((_, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => setModal({ slotId: slot.id })}
-                          className="rounded-full border border-dashed border-[#221F1B]/20 text-[#8A8378] text-xs px-3 py-1"
-                        >
-                          + Libre
-                        </button>
-                      ))}
+                      {!esProfe && Array.from({ length: libres > 0 ? libres : 0 }).map((_, idx) => {
+                        const reservada = idx >= libres - reservadasDe(slot, libres)
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => setModal({ slotId: slot.id })}
+                            className={`rounded-full border border-dashed text-xs px-3 py-1 ${reservada ? 'border-[#8A6B2C]/60 bg-[#FBF4E4] text-[#8A6B2C]' : 'border-[#221F1B]/20 text-[#8A8378]'}`}
+                          >
+                            {reservada ? `Ocupada desde ${nombreMesSig}` : '+ Libre'}
+                          </button>
+                        )
+                      })}
+                      {!esProfe && libresProx(slot) !== libres && (
+                        <span className="text-[11px] text-[#8A6B2C] self-center">
+                          desde {nombreMesSig}: {Math.max(0, libresProx(slot))} libre{Math.max(0, libresProx(slot)) === 1 ? '' : 's'}
+                        </span>
+                      )}
                       {esProfe && libres > 0 && (
                         <span className="text-[11px] text-[#B7B9B1]">{libres} libre{libres > 1 ? 's' : ''}</span>
                       )}
@@ -1030,6 +1078,11 @@ export default function Grilla() {
                 <p className="text-sm font-medium text-[#8A6B2C] mb-1">5. Recuperos (cápsulas punteadas con una R)</p>
                 <p className="text-sm text-[#221F1B]">Cuando alguien pide recuperar una clase, tocá un "+ Libre", elegí "Recupero (una clase)", la fecha y la persona. Ocupa una cama solo ese día: el sistema no deja anotar más recuperos que camas libres, así no se pisan entre ustedes. No suma en cobranza ni cambia los horarios libres del mes. Las profes lo ven en la grilla.</p>
               </div>
+
+              <div>
+                <p className="text-sm font-medium text-[#8A6B2C] mb-1">6. Camas que ya están ocupadas el mes que viene</p>
+                <p className="text-sm text-[#221F1B]">Si ves una cama punteada en ámbar que dice "Ocupada desde [mes]", hoy está libre pero ya la tiene alguien del mes que viene (alguien que sigue, o a quien anotaste directo en el mes siguiente). No la ofrezcas. Debajo de cada horario aparece "desde [mes]: X libres", que es lo que de verdad queda para ofrecer. En "Disponibilidad" y en la placa podés elegir "Desde [mes]" y arma el mensaje con eso. Para anotar a alguien desde el mes que viene sin tocar la cobranza de este mes, cambiá al mes siguiente con las flechas y anotala ahí.</p>
+              </div>
             </div>
 
             <div className="flex justify-end mt-4">
@@ -1075,8 +1128,22 @@ export default function Grilla() {
       {dispAbierta && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setDispAbierta(false)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-medium text-[#221F1B] mb-1">Disponibilidad — {labelMes}</p>
-            <p className="text-xs text-[#8A8378] mb-4">Elegí para cuántas camas consultás</p>
+            <p className="text-sm font-medium text-[#221F1B] mb-1">Disponibilidad — {labelOferta}</p>
+            <p className="text-xs text-[#8A8378] mb-3">Elegí desde cuándo ofrecés la cama</p>
+            <div className="flex gap-2 mb-1">
+              <button onClick={() => setOfrecerPara('este')} className={`px-4 py-1.5 rounded-full text-sm border ${!ofertaProx ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
+                Este mes
+              </button>
+              <button onClick={() => setOfrecerPara('prox')} className={`px-4 py-1.5 rounded-full text-sm border ${ofertaProx ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
+                Desde {nombreMesSig}
+              </button>
+            </div>
+            <p className="text-[11px] text-[#8A8378] mb-4">
+              {ofertaProx
+                ? `Cuenta como ocupadas las camas de quienes siguen en ${nombreMesSig} y de quienes ya anotaste directo en ${nombreMesSig}. Las de quienes marcaste "No continúa" quedan libres.`
+                : 'Cuenta solo a quienes están anotados en este mes.'}
+            </p>
+            <p className="text-xs text-[#8A8378] mb-2">Elegí para cuántas camas consultás</p>
             <div className="flex gap-2 mb-4">
               {[1, 2].map(n => (
                 <button key={n} onClick={() => setCamasConsulta(n)} className={`px-4 py-1.5 rounded-full text-sm border ${camasConsulta === n ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
@@ -1100,7 +1167,7 @@ export default function Grilla() {
       {placaAbierta && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-8" onClick={() => setPlacaAbierta(false)}>
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-medium text-[#221F1B] mb-3">Placa para Instagram — {labelMes}</p>
+            <p className="text-sm font-medium text-[#221F1B] mb-3">Placa para Instagram — {labelOferta}</p>
 
             <div className="flex gap-2 mb-3">
               <label className="flex-1 text-center px-3 py-2 rounded-full text-sm border border-[#221F1B]/15 text-[#221F1B] hover:border-[#5C6F5D] cursor-pointer">
