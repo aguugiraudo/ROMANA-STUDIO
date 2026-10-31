@@ -340,7 +340,7 @@ export default function Grilla() {
   }
 
   async function crearYAsignar(slotId, nombre) {
-    const nombreLimpio = nombre.trim()
+    const nombreLimpio = nombre.trim().toLocaleUpperCase('es-AR')
     if (!nombreLimpio) return
     const { data: nuevo, error } = await supabase
       .from('alumnos').insert({ nombre: nombreLimpio, clases_semana: 2, estado: 'activo' }).select().single()

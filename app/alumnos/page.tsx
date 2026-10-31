@@ -482,7 +482,7 @@ export default function Alumnos() {
   async function guardarEdicion() {
     if (!editando) return
     const cambios = {
-      nombre: editando.nombre,
+      nombre: String(editando.nombre || '').trim().toLocaleUpperCase('es-AR'),
       exento_pago: editando.exento_pago,
       genero: editando.genero || null,
       anio_nacimiento: editando.anio_nacimiento ? parseInt(String(editando.anio_nacimiento)) : null,
