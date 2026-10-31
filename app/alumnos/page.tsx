@@ -165,6 +165,7 @@ export default function Alumnos() {
   const [motivos, setMotivos] = useState({})
   const [cargandoRet, setCargandoRet] = useState(true)
   const [busqueda, setBusqueda] = useState('')
+  const [soloSinGenero, setSoloSinGenero] = useState(false)
   const [filtro, setFiltro] = useState('activo')
   const [editando, setEditando] = useState(null)
   const [viendo, setViendo] = useState(null)
@@ -461,20 +462,36 @@ export default function Alumnos() {
     const activo = idsActivosHoy.has(String(a.id))
     if (filtro === 'activo' && !activo) return false
     if (filtro === 'baja' && activo) return false
+    if (soloSinGenero && a.genero) return false
     return a.nombre.toLowerCase().includes(busqueda.toLowerCase())
   })
 
+  const sinGeneroCount = alumnos.filter(a => !a.genero).length
+
+  // Guarda el género al instante, sin recargar la lista (así no se pierde la posición del scroll).
+  async function elegirGenero(alumno, g) {
+    const nuevo = alumno.genero === g ? null : g
+    setAlumnos(prev => prev.map(x => x.id === alumno.id ? { ...x, genero: nuevo } : x))
+    const { error } = await supabase.from('alumnos').update({ genero: nuevo }).eq('id', alumno.id)
+    if (error) {
+      setAlumnos(prev => prev.map(x => x.id === alumno.id ? { ...x, genero: alumno.genero || null } : x))
+      alert('No se pudo guardar: ' + error.message)
+    }
+  }
+
   async function guardarEdicion() {
     if (!editando) return
-    await supabase.from('alumnos').update({
+    const cambios = {
       nombre: editando.nombre,
       exento_pago: editando.exento_pago,
       genero: editando.genero || null,
-      anio_nacimiento: editando.anio_nacimiento ? parseInt(editando.anio_nacimiento) : null,
+      anio_nacimiento: editando.anio_nacimiento ? parseInt(String(editando.anio_nacimiento)) : null,
       canal_origen: editando.canal_origen || null
-    }).eq('id', editando.id)
+    }
+    const { error } = await supabase.from('alumnos').update(cambios).eq('id', editando.id)
+    if (error) { alert('No se pudo guardar: ' + error.message); return }
+    setAlumnos(prev => prev.map(x => x.id === editando.id ? { ...x, ...cambios } : x))
     setEditando(null)
-    cargar()
   }
 
   function abrirFusionCon(nombreA, nombreB) {
@@ -638,6 +655,10 @@ export default function Alumnos() {
               ))}
             </div>
             <div className="flex gap-2">
+              <label className="flex items-center gap-2 text-xs text-[#221F1B] cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={soloSinGenero} onChange={e => setSoloSinGenero(e.target.checked)} />
+                Sin género ({sinGeneroCount})
+              </label>
               <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar alumno…" className="border border-[#221F1B]/15 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#5C6F5D] bg-white" />
               <button
                 onClick={() => { setFusionAbierta(true); setBuscA(''); setBuscB(''); setSeleccionA(null); setSeleccionB(null); setConteos(null); setSurvivor(null) }}
@@ -657,6 +678,7 @@ export default function Alumnos() {
                   <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
                     <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Nombre</th>
                     <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-48">Clases/sem ({labelMesStats})</th>
+                    <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-28">Género</th>
                     <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-28">Estado</th>
                     <th className="w-16"></th>
                   </tr>
@@ -673,6 +695,20 @@ export default function Alumnos() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{clasesPorAlumno[a.id] ?? 0}</td>
+                      <td className="px-4 py-2 text-center">
+                        <div className="inline-flex gap-1.5">
+                          {[['Femenino', 'F'], ['Masculino', 'M']].map(([g, letra]) => (
+                            <button
+                              key={g}
+                              onClick={() => elegirGenero(a, g)}
+                              title={g}
+                              className={`w-8 h-8 rounded-full text-xs font-semibold border ${a.genero === g ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#8A8378] border-[#221F1B]/15 hover:border-[#5C6F5D] hover:text-[#5C6F5D]'}`}
+                            >
+                              {letra}
+                            </button>
+                          ))}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className={`text-xs px-2 py-1 rounded-full ${idsActivosHoy.has(String(a.id)) ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
                           {idsActivosHoy.has(String(a.id)) ? 'Activo' : 'Baja'}
@@ -684,7 +720,7 @@ export default function Alumnos() {
                     </tr>
                   ))}
                   {filtrados.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin resultados</td></tr>
+                    <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin resultados</td></tr>
                   )}
                 </tbody>
               </table>
