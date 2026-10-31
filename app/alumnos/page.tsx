@@ -165,6 +165,7 @@ export default function Alumnos() {
   const [motivos, setMotivos] = useState({})
   const [cargandoRet, setCargandoRet] = useState(true)
   const [busqueda, setBusqueda] = useState('')
+  const [soloSinGenero, setSoloSinGenero] = useState(false)
   const [confirmarEliminar, setConfirmarEliminar] = useState(null)
   const [eliminando, setEliminando] = useState(false)
   const [filtro, setFiltro] = useState('activo')
@@ -463,8 +464,11 @@ export default function Alumnos() {
     const activo = idsActivosHoy.has(String(a.id))
     if (filtro === 'activo' && !activo) return false
     if (filtro === 'baja' && activo) return false
+    if (soloSinGenero && a.genero) return false
     return a.nombre.toLowerCase().includes(busqueda.toLowerCase())
   })
+
+  const sinGeneroCount = alumnos.filter(a => !a.genero).length
 
   async function pedirEliminar(alumno) {
     const [insc, cob] = await Promise.all([
@@ -667,6 +671,10 @@ export default function Alumnos() {
               ))}
             </div>
             <div className="flex gap-2">
+              <label className="flex items-center gap-2 text-xs text-[#221F1B] cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={soloSinGenero} onChange={e => setSoloSinGenero(e.target.checked)} />
+                Sin género ({sinGeneroCount})
+              </label>
               <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar alumno…" className="border border-[#221F1B]/15 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#5C6F5D] bg-white" />
               <button
                 onClick={() => { setFusionAbierta(true); setBuscA(''); setBuscB(''); setSeleccionA(null); setSeleccionB(null); setConteos(null); setSurvivor(null) }}
