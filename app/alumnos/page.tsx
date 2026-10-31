@@ -165,7 +165,8 @@ export default function Alumnos() {
   const [motivos, setMotivos] = useState({})
   const [cargandoRet, setCargandoRet] = useState(true)
   const [busqueda, setBusqueda] = useState('')
-  const [soloSinGenero, setSoloSinGenero] = useState(false)
+  const [confirmarEliminar, setConfirmarEliminar] = useState(null)
+  const [eliminando, setEliminando] = useState(false)
   const [filtro, setFiltro] = useState('activo')
   const [editando, setEditando] = useState(null)
   const [viendo, setViendo] = useState(null)
@@ -462,21 +463,32 @@ export default function Alumnos() {
     const activo = idsActivosHoy.has(String(a.id))
     if (filtro === 'activo' && !activo) return false
     if (filtro === 'baja' && activo) return false
-    if (soloSinGenero && a.genero) return false
     return a.nombre.toLowerCase().includes(busqueda.toLowerCase())
   })
 
-  const sinGeneroCount = alumnos.filter(a => !a.genero).length
+  async function pedirEliminar(alumno) {
+    const [insc, cob] = await Promise.all([
+      supabase.from('inscripciones').select('id', { count: 'exact', head: true }).eq('alumno_id', alumno.id),
+      supabase.from('cobranzas').select('id', { count: 'exact', head: true }).eq('alumno_id', alumno.id),
+    ])
+    setConfirmarEliminar({ alumno, insc: insc.count || 0, cob: cob.count || 0 })
+  }
 
-  // Guarda el género al instante, sin recargar la lista (así no se pierde la posición del scroll).
-  async function elegirGenero(alumno, g) {
-    const nuevo = alumno.genero === g ? null : g
-    setAlumnos(prev => prev.map(x => x.id === alumno.id ? { ...x, genero: nuevo } : x))
-    const { error } = await supabase.from('alumnos').update({ genero: nuevo }).eq('id', alumno.id)
-    if (error) {
-      setAlumnos(prev => prev.map(x => x.id === alumno.id ? { ...x, genero: alumno.genero || null } : x))
-      alert('No se pudo guardar: ' + error.message)
+  async function eliminarAlumnoAhora() {
+    if (!confirmarEliminar || eliminando) return
+    setEliminando(true)
+    const id = confirmarEliminar.alumno.id
+    for (const tabla of ['recuperos', 'motivos_baja', 'cobranzas', 'inscripciones']) {
+      const { error } = await supabase.from(tabla).delete().eq('alumno_id', id)
+      if (error) { alert(`No se pudo borrar (${tabla}): ` + error.message); setEliminando(false); return }
     }
+    const { error } = await supabase.from('alumnos').delete().eq('id', id)
+    if (error) { alert('No se pudo eliminar: ' + error.message); setEliminando(false); return }
+    setAlumnos(prev => prev.filter(x => x.id !== id))
+    setConfirmarEliminar(null)
+    setEditando(null)
+    setEliminando(false)
+    cargarRetencion()
   }
 
   async function guardarEdicion() {
@@ -655,10 +667,6 @@ export default function Alumnos() {
               ))}
             </div>
             <div className="flex gap-2">
-              <label className="flex items-center gap-2 text-xs text-[#221F1B] cursor-pointer whitespace-nowrap">
-                <input type="checkbox" checked={soloSinGenero} onChange={e => setSoloSinGenero(e.target.checked)} />
-                Sin género ({sinGeneroCount})
-              </label>
               <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar alumno…" className="border border-[#221F1B]/15 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[#5C6F5D] bg-white" />
               <button
                 onClick={() => { setFusionAbierta(true); setBuscA(''); setBuscB(''); setSeleccionA(null); setSeleccionB(null); setConteos(null); setSurvivor(null) }}
@@ -678,7 +686,6 @@ export default function Alumnos() {
                   <tr className="border-b border-[#221F1B]/10 bg-[#F3EEE4]">
                     <th className="text-left px-4 py-3 text-sm font-semibold text-[#221F1B]">Nombre</th>
                     <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-48">Clases/sem ({labelMesStats})</th>
-                    <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-28">Género</th>
                     <th className="text-center px-4 py-3 text-sm font-semibold text-[#221F1B] w-28">Estado</th>
                     <th className="w-16"></th>
                   </tr>
@@ -695,20 +702,6 @@ export default function Alumnos() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{clasesPorAlumno[a.id] ?? 0}</td>
-                      <td className="px-4 py-2 text-center">
-                        <div className="inline-flex gap-1.5">
-                          {[['Femenino', 'F'], ['Masculino', 'M']].map(([g, letra]) => (
-                            <button
-                              key={g}
-                              onClick={() => elegirGenero(a, g)}
-                              title={g}
-                              className={`w-8 h-8 rounded-full text-xs font-semibold border ${a.genero === g ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#8A8378] border-[#221F1B]/15 hover:border-[#5C6F5D] hover:text-[#5C6F5D]'}`}
-                            >
-                              {letra}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className={`text-xs px-2 py-1 rounded-full ${idsActivosHoy.has(String(a.id)) ? 'bg-[#5C6F5D] text-white' : 'bg-[#EDE7DD] text-[#8A8378]'}`}>
                           {idsActivosHoy.has(String(a.id)) ? 'Activo' : 'Baja'}
@@ -720,7 +713,7 @@ export default function Alumnos() {
                     </tr>
                   ))}
                   {filtrados.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin resultados</td></tr>
+                    <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-[#8A8378]">Sin resultados</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1176,9 +1169,29 @@ export default function Alumnos() {
               </button>
             </div>
 
-            <div className="flex gap-3 justify-end">
+            <div className="flex gap-3 items-center">
+              <button onClick={() => pedirEliminar(editando)} className="text-xs text-[#B5504A] hover:underline mr-auto">Eliminar alumno</button>
               <button onClick={() => setEditando(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
               <button onClick={guardarEdicion} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmarEliminar && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center px-4 z-50" onClick={() => setConfirmarEliminar(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-medium text-[#221F1B] mb-2">¿Eliminar a {confirmarEliminar.alumno.nombre}?</p>
+            {confirmarEliminar.insc === 0 && confirmarEliminar.cob === 0 ? (
+              <p className="text-sm text-[#8A8378] mb-5">No tiene horarios ni cobros cargados. Se borra del todo y no se puede deshacer.</p>
+            ) : (
+              <p className="text-sm text-[#B5504A] mb-5">
+                Tiene {confirmarEliminar.insc} inscripcion{confirmarEliminar.insc === 1 ? '' : 'es'} y {confirmarEliminar.cob} cobro{confirmarEliminar.cob === 1 ? '' : 's'} cargados. Se borran también, y los meses pasados dejan de contarla. No se puede deshacer. Si es una persona real que se fue, usá la baja y no esto. Si es la misma persona que otro registro, usá "Fusionar alumnos".
+              </p>
+            )}
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setConfirmarEliminar(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
+              <button onClick={eliminarAlumnoAhora} disabled={eliminando} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#B5504A] hover:bg-[#9E4540]">{eliminando ? 'Eliminando…' : 'Sí, eliminar'}</button>
             </div>
           </div>
         </div>
