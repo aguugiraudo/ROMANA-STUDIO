@@ -259,8 +259,10 @@ export default function Grilla() {
   const labelOferta = ofertaProx ? labelMesSig : labelMes
   function esperaDe(slotId) { return listaEspera.filter(e => e.horario_clase_id === slotId) }
   function recuperosDe(slotId) {
+    // Los recuperos de días que ya pasaron quedan guardados en la base, pero ya no se muestran en la grilla.
+    const hoyISO = fechaISO(new Date())
     return recuperos
-      .filter(r => r.horario_clase_id === slotId)
+      .filter(r => r.horario_clase_id === slotId && r.fecha >= hoyISO)
       .sort((a, b) => a.fecha.localeCompare(b.fecha))
   }
 
@@ -1076,7 +1078,7 @@ export default function Grilla() {
 
               <div>
                 <p className="text-sm font-medium text-[#8A6B2C] mb-1">5. Recuperos (cápsulas punteadas con una R)</p>
-                <p className="text-sm text-[#221F1B]">Cuando alguien pide recuperar una clase, tocá un "+ Libre", elegí "Recupero (una clase)", la fecha y la persona. Ocupa una cama solo ese día: el sistema no deja anotar más recuperos que camas libres, así no se pisan entre ustedes. No suma en cobranza ni cambia los horarios libres del mes. Las profes lo ven en la grilla.</p>
+                <p className="text-sm text-[#221F1B]">Cuando alguien pide recuperar una clase, tocá un "+ Libre", elegí "Recupero (una clase)", la fecha y la persona. Ocupa una cama solo ese día: el sistema no deja anotar más recuperos que camas libres, así no se pisan entre ustedes. No suma en cobranza ni cambia los horarios libres del mes. Las profes lo ven en la grilla. Cuando pasa el día del recupero, deja de mostrarse solo (queda guardado).</p>
               </div>
 
               <div>
