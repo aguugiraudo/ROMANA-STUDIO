@@ -72,14 +72,15 @@ const PASOS_SEGUIMIENTO = [
   { clave: '15d', dias: 15, titulo: '15 días' },
   { clave: '45d', dias: 45, titulo: 'Mes y medio' },
 ]
-// Cuántos días después del día del paso sigue apareciendo como pendiente (si no se marcó como enviado).
-const VENTANA_DIAS = 14
+// Solo se hace seguimiento a alumnos que arrancaron por primera vez desde esta fecha (primer día del mes).
+// Para sumar más alumnos viejos, poné una fecha anterior.
+const INICIO_SEGUIMIENTO = '2026-10-01'
 // Cuántos días antes se muestran en "Próximos".
 const ADELANTO_DIAS = 7
 
 const PLANTILLAS_INICIALES = {
-  '15d': 'Hola {nombre}! ¿Cómo estás? Te escribo de Romana. Ya pasaron unas semanas desde que empezaste y quería saber cómo te estás sintiendo con las clases. ¿Hay algo que quieras ajustar, el horario, el ritmo o el grupo? Contame y lo vemos.',
-  '45d': 'Hola {nombre}! Ya llevás mes y medio en Romana. ¿Cómo venís? Queríamos saber qué tal te está yendo y si hay algo que podamos mejorar o que te gustaría probar. Cualquier cosa, escribime.',
+  '15d': 'Hola {nombre}! ¿Cómo estás? Te escribimos de Romana. Pasaron unas semanas desde que empezaste y queríamos saber cómo te estás sintiendo con las clases. Nos encanta tenerte con nosotros 🤍 Si en algún momento querés contarnos algo, nuestra puerta está abierta. ¡Un abrazo!',
+  '45d': 'Hola {nombre}! Ya llevás mes y medio en Romana y nos pone muy contentos. ¿Cómo venís? Nos gustaría saber cómo te sentís en las clases. Cualquier idea, comentario o cosa que quieras contarnos, escribinos cuando quieras. ¡Gracias por ser parte!',
 }
 
 function fechaLocal(valor) {
@@ -669,12 +670,18 @@ export default function Alumnos() {
     const proximos = []
     alumnos.forEach(a => {
       if (!idsActivosHoy.has(String(a.id))) return
+      // Solo los que arrancaron por primera vez desde INICIO_SEGUIMIENTO (según su primera inscripción)
+      const primerMes = modelo.primerMesDe[String(a.id)]
+      if (!primerMes || primerMes < INICIO_SEGUIMIENTO) return
       const alta = a.fecha_alta || a.created_at
+      const fechaAlta = fechaLocal(alta)
+      const desde = fechaLocal(INICIO_SEGUIMIENTO)
+      if (!fechaAlta || !desde || fechaAlta.getTime() < desde.getTime()) return
       const dias = diasDesde(alta)
       if (dias === null || dias < 0) return
       PASOS_SEGUIMIENTO.forEach(p => {
         if (enviadosSet[`${a.id}|${p.clave}`]) return
-        if (dias >= p.dias && dias <= p.dias + VENTANA_DIAS) pendientes.push({ alumno: a, paso: p, dias, alta })
+        if (dias >= p.dias) pendientes.push({ alumno: a, paso: p, dias, alta })
         else if (dias < p.dias && dias >= p.dias - ADELANTO_DIAS) proximos.push({ alumno: a, paso: p, dias, alta, faltan: p.dias - dias })
       })
     })
@@ -687,7 +694,7 @@ export default function Alumnos() {
       .filter(x => x.alumno && x.paso)
       .sort((x, y) => String(y.reg.enviado_en).localeCompare(String(x.reg.enviado_en)))
     return { pendientes, proximos, enviados }
-  }, [alumnos, idsActivosHoy, enviadosSet, seguimientos, alumnoPorId])
+  }, [alumnos, idsActivosHoy, enviadosSet, seguimientos, alumnoPorId, modelo])
 
   function mensajeSugerido(a, clave) {
     const base = plantillas[clave] || PLANTILLAS_INICIALES[clave] || ''
@@ -903,7 +910,7 @@ export default function Alumnos() {
         <div className="max-w-4xl">
           <p className="text-sm text-[#221F1B] mb-1">Alumnos nuevos a los que les toca un mensaje de seguimiento</p>
           <p className="text-xs text-[#8A8378] mb-5">
-            Se cuenta desde la fecha de alta de cada alumno. Avisa a los {PASOS_SEGUIMIENTO.map(p => p.titulo.toLowerCase()).join(' y a los ')}. Copiá el mensaje, mandalo por WhatsApp y marcalo como enviado.
+            Se cuenta desde la fecha de alta de cada alumno, y solo para los que arrancaron por primera vez desde {labelDeMes(INICIO_SEGUIMIENTO)}. Avisa a los {PASOS_SEGUIMIENTO.map(p => p.titulo.toLowerCase()).join(' y a los ')}. Copiá el mensaje, mandalo por WhatsApp y marcalo como enviado.
           </p>
 
           {segError && (
