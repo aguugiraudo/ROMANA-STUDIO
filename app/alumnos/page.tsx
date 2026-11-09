@@ -35,7 +35,7 @@ const MOTIVOS_BAJA = [
 ]
 
 const BUCKETS = ['Estuvo 1 mes', '2 a 3 meses', '4 a 6 meses', '7 meses o más']
-const TABS = [['listado', 'Listado'], ['bajas', 'Bajas'], ['retencion', 'Retención'], ['perfil', 'Perfil']]
+const TABS = [['listado', 'Listado'], ['seguimiento', 'Seguimiento'], ['bajas', 'Bajas'], ['retencion', 'Retención'], ['perfil', 'Perfil']]
 const RANGOS = [['1', 'Último mes'], ['3', '3 meses'], ['6', '6 meses'], ['todo', 'Todo el historial'], ['custom', 'Elegir meses']]
 
 function mesActualISO() {
@@ -63,6 +63,56 @@ function bucketAntig(n) {
   if (n <= 3) return BUCKETS[1]
   if (n <= 6) return BUCKETS[2]
   return BUCKETS[3]
+}
+
+// ---------- Seguimiento de alumnos nuevos ----------
+// Cada paso avisa cuando el alumno cumple esos días desde su primera fecha de alta.
+// Para cambiar los días o agregar un paso (por ejemplo, 7 días), editá esta lista.
+const PASOS_SEGUIMIENTO = [
+  { clave: '15d', dias: 15, titulo: '15 días' },
+  { clave: '45d', dias: 45, titulo: 'Mes y medio' },
+]
+// Cuántos días después del día del paso sigue apareciendo como pendiente (si no se marcó como enviado).
+const VENTANA_DIAS = 14
+// Cuántos días antes se muestran en "Próximos".
+const ADELANTO_DIAS = 7
+
+const PLANTILLAS_INICIALES = {
+  '15d': 'Hola {nombre}! ¿Cómo estás? Te escribo de Romana. Ya pasaron unas semanas desde que empezaste y quería saber cómo te estás sintiendo con las clases. ¿Hay algo que quieras ajustar, el horario, el ritmo o el grupo? Contame y lo vemos.',
+  '45d': 'Hola {nombre}! Ya llevás mes y medio en Romana. ¿Cómo venís? Queríamos saber qué tal te está yendo y si hay algo que podamos mejorar o que te gustaría probar. Cualquier cosa, escribime.',
+}
+
+function fechaLocal(valor) {
+  if (!valor) return null
+  const txt = String(valor)
+  const solo = /^(\d{4})-(\d{2})-(\d{2})$/.exec(txt)
+  if (solo) return new Date(Number(solo[1]), Number(solo[2]) - 1, Number(solo[3]))
+  const d = new Date(txt)
+  if (isNaN(d.getTime())) return null
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+function diasDesde(fecha) {
+  const f = fechaLocal(fecha)
+  if (!f) return null
+  const hoy = new Date()
+  const hoy0 = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())
+  return Math.round((hoy0.getTime() - f.getTime()) / 86400000)
+}
+
+function formatoFechaCorta(fecha) {
+  const f = fechaLocal(fecha)
+  if (!f) return ''
+  return `${String(f.getDate()).padStart(2, '0')}/${String(f.getMonth() + 1).padStart(2, '0')}`
+}
+
+function nombrePropio(nombre) {
+  const primero = String(nombre || '').trim().split(/\s+/)[0] || ''
+  return primero.charAt(0).toLocaleUpperCase('es-AR') + primero.slice(1).toLocaleLowerCase('es-AR')
+}
+
+function nombreCompleto(nombre) {
+  return String(nombre || '').trim().toLocaleLowerCase('es-AR').replace(/(^|\s)(\S)/g, (m, sp, ch) => sp + ch.toLocaleUpperCase('es-AR'))
 }
 
 async function fetchTodasInscripciones() {
@@ -180,6 +230,13 @@ export default function Alumnos() {
   const [conteos, setConteos] = useState(null)
   const [survivor, setSurvivor] = useState(null)
   const [sospechososVigentes, setSospechososVigentes] = useState([])
+  const [seguimientos, setSeguimientos] = useState([])
+  const [segError, setSegError] = useState('')
+  const [plantillas, setPlantillas] = useState(PLANTILLAS_INICIALES)
+  const [editandoPlantillas, setEditandoPlantillas] = useState(false)
+  const [mensajesEdit, setMensajesEdit] = useState({})
+  const [copiadoKey, setCopiadoKey] = useState('')
+  const [guardandoSeg, setGuardandoSeg] = useState('')
 
   useEffect(() => {
     const r = getRol()
@@ -222,7 +279,25 @@ export default function Alumnos() {
     setCargandoRet(false)
   }, [])
 
-  useEffect(() => { if (rol) { cargar(); cargarRetencion() } }, [cargar, cargarRetencion, rol])
+  const cargarSeguimientos = useCallback(async () => {
+    const { data, error } = await supabase.from('seguimientos').select('*')
+    if (error) {
+      setSegError(error.message)
+      setSeguimientos([])
+      return
+    }
+    setSegError('')
+    setSeguimientos(data || [])
+  }, [])
+
+  useEffect(() => { if (rol) { cargar(); cargarRetencion(); cargarSeguimientos() } }, [cargar, cargarRetencion, cargarSeguimientos, rol])
+
+  useEffect(() => {
+    try {
+      const guardado = window.localStorage.getItem('romana_plantillas_seguimiento')
+      if (guardado) setPlantillas({ ...PLANTILLAS_INICIALES, ...JSON.parse(guardado) })
+    } catch (e) { /* si no hay almacenamiento, quedan las plantillas iniciales */ }
+  }, [])
 
   const modelo = useMemo(() => {
     const porMes = {}
@@ -486,6 +561,7 @@ export default function Alumnos() {
       const { error } = await supabase.from(tabla).delete().eq('alumno_id', id)
       if (error) { alert(`No se pudo borrar (${tabla}): ` + error.message); setEliminando(false); return }
     }
+    await supabase.from('seguimientos').delete().eq('alumno_id', String(id))
     const { error } = await supabase.from('alumnos').delete().eq('id', id)
     if (error) { alert('No se pudo eliminar: ' + error.message); setEliminando(false); return }
     setAlumnos(prev => prev.filter(x => x.id !== id))
@@ -581,6 +657,99 @@ export default function Alumnos() {
     extra: `${Math.round((retencion.antig[b] / Math.max(1, retencion.bajasTotal)) * 100)}%`
   }))
 
+  // ---------- Seguimiento: quién toca escribirle ----------
+  const enviadosSet = useMemo(() => {
+    const m = {}
+    seguimientos.forEach(r => { m[`${r.alumno_id}|${r.paso}`] = r })
+    return m
+  }, [seguimientos])
+
+  const seguimiento = useMemo(() => {
+    const pendientes = []
+    const proximos = []
+    alumnos.forEach(a => {
+      if (!idsActivosHoy.has(String(a.id))) return
+      const alta = a.fecha_alta || a.created_at
+      const dias = diasDesde(alta)
+      if (dias === null || dias < 0) return
+      PASOS_SEGUIMIENTO.forEach(p => {
+        if (enviadosSet[`${a.id}|${p.clave}`]) return
+        if (dias >= p.dias && dias <= p.dias + VENTANA_DIAS) pendientes.push({ alumno: a, paso: p, dias, alta })
+        else if (dias < p.dias && dias >= p.dias - ADELANTO_DIAS) proximos.push({ alumno: a, paso: p, dias, alta, faltan: p.dias - dias })
+      })
+    })
+    pendientes.sort((x, y) => y.dias - x.dias)
+    proximos.sort((x, y) => x.faltan - y.faltan)
+    const hace30 = Date.now() - 30 * 86400000
+    const enviados = seguimientos
+      .filter(r => r.enviado_en && new Date(r.enviado_en).getTime() >= hace30)
+      .map(r => ({ reg: r, alumno: alumnoPorId[String(r.alumno_id)], paso: PASOS_SEGUIMIENTO.find(p => p.clave === r.paso) }))
+      .filter(x => x.alumno && x.paso)
+      .sort((x, y) => String(y.reg.enviado_en).localeCompare(String(x.reg.enviado_en)))
+    return { pendientes, proximos, enviados }
+  }, [alumnos, idsActivosHoy, enviadosSet, seguimientos, alumnoPorId])
+
+  function mensajeSugerido(a, clave) {
+    const base = plantillas[clave] || PLANTILLAS_INICIALES[clave] || ''
+    return base.split('{nombre}').join(nombrePropio(a.nombre))
+  }
+
+  function mensajeDe(a, clave) {
+    const k = `${a.id}|${clave}`
+    return mensajesEdit[k] !== undefined ? mensajesEdit[k] : mensajeSugerido(a, clave)
+  }
+
+  function resumenClases(a) {
+    const hs = horariosDe((modelo.porMes[mesHoy] || {})[String(a.id)] || [])
+    if (hs.length === 0) return ''
+    return hs.map(h => `${h.dia} ${formatHora(h.hora)}${nombreProfeDe(h) ? ' · ' + nombreProfeDe(h) : ''}`).join('  |  ')
+  }
+
+  async function copiarMensaje(a, clave) {
+    const texto = mensajeDe(a, clave)
+    try {
+      await navigator.clipboard.writeText(texto)
+    } catch (e) {
+      const ta = document.createElement('textarea')
+      ta.value = texto
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch (e2) { /* sin permiso para copiar */ }
+      document.body.removeChild(ta)
+    }
+    const k = `${a.id}|${clave}`
+    setCopiadoKey(k)
+    setTimeout(() => setCopiadoKey(prev => (prev === k ? '' : prev)), 2000)
+  }
+
+  async function marcarEnviado(a, clave) {
+    const k = `${a.id}|${clave}`
+    setGuardandoSeg(k)
+    const fila = { alumno_id: String(a.id), paso: clave, enviado_en: new Date().toISOString(), mensaje: mensajeDe(a, clave) }
+    const { error } = await supabase.from('seguimientos').upsert(fila, { onConflict: 'alumno_id,paso' })
+    setGuardandoSeg('')
+    if (error) { alert('No se pudo guardar el seguimiento: ' + error.message); return }
+    setSeguimientos(prev => [...prev.filter(r => !(String(r.alumno_id) === String(a.id) && r.paso === clave)), fila])
+  }
+
+  async function deshacerEnviado(a, clave) {
+    const { error } = await supabase.from('seguimientos').delete().eq('alumno_id', String(a.id)).eq('paso', clave)
+    if (error) { alert('No se pudo deshacer: ' + error.message); return }
+    setSeguimientos(prev => prev.filter(r => !(String(r.alumno_id) === String(a.id) && r.paso === clave)))
+  }
+
+  function guardarPlantillas() {
+    try { window.localStorage.setItem('romana_plantillas_seguimiento', JSON.stringify(plantillas)) } catch (e) { /* sin almacenamiento */ }
+    setMensajesEdit({})
+    setEditandoPlantillas(false)
+  }
+
+  function restaurarPlantillas() {
+    setPlantillas(PLANTILLAS_INICIALES)
+    try { window.localStorage.removeItem('romana_plantillas_seguimiento') } catch (e) { /* sin almacenamiento */ }
+    setMensajesEdit({})
+  }
+
   if (!rol) return null
 
   return (
@@ -602,7 +771,7 @@ export default function Alumnos() {
               onClick={() => setTab(key)}
               className={`px-4 py-1.5 rounded-full text-sm border ${tab === key ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}
             >
-              {label}{key === 'bajas' && transicionMes ? ` (${transicionMes.bajas.length})` : ''}
+              {label}{key === 'bajas' && transicionMes ? ` (${transicionMes.bajas.length})` : ''}{key === 'seguimiento' && seguimiento.pendientes.length > 0 ? ` (${seguimiento.pendientes.length})` : ''}
             </button>
           ))}
         </div>
@@ -728,6 +897,127 @@ export default function Alumnos() {
             </div>
           )}
         </>
+      )}
+
+      {tab === 'seguimiento' && (
+        <div className="max-w-4xl">
+          <p className="text-sm text-[#221F1B] mb-1">Alumnos nuevos a los que les toca un mensaje de seguimiento</p>
+          <p className="text-xs text-[#8A8378] mb-5">
+            Se cuenta desde la fecha de alta de cada alumno. Avisa a los {PASOS_SEGUIMIENTO.map(p => p.titulo.toLowerCase()).join(' y a los ')}. Copiá el mensaje, mandalo por WhatsApp y marcalo como enviado.
+          </p>
+
+          {segError && (
+            <div className="bg-[#FFF6E5] border border-[#E8C77A] rounded-xl p-4 mb-5">
+              <p className="text-sm text-[#8A6B2C] font-medium mb-1">Falta preparar la base de datos para el seguimiento</p>
+              <p className="text-xs text-[#8A6B2C]">Corré en Supabase el SQL del seguimiento (tabla "seguimientos" y columna "fecha_alta"). Detalle del error: {segError}</p>
+            </div>
+          )}
+
+          <div className="bg-[#FBF9F5] rounded-2xl border border-[#221F1B]/8 p-5 mb-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-sm font-medium text-[#221F1B]">Mensajes sugeridos</p>
+              <button onClick={() => setEditandoPlantillas(v => !v)} className="text-xs text-[#5C6F5D] hover:underline font-medium">
+                {editandoPlantillas ? 'Cerrar' : 'Editar mensajes sugeridos'}
+              </button>
+            </div>
+            {editandoPlantillas && (
+              <div className="mt-4 flex flex-col gap-4">
+                <p className="text-xs text-[#8A8378]">Escribí {'{nombre}'} donde quieras que aparezca el nombre del alumno. Los cambios valen para todos los mensajes nuevos.</p>
+                {PASOS_SEGUIMIENTO.map(p => (
+                  <div key={p.clave}>
+                    <label className="block text-xs text-[#8A8378] mb-1">{p.titulo}</label>
+                    <textarea
+                      value={plantillas[p.clave] || ''}
+                      onChange={e => setPlantillas({ ...plantillas, [p.clave]: e.target.value })}
+                      rows={4}
+                      className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D] bg-white"
+                    />
+                  </div>
+                ))}
+                <div className="flex gap-3 justify-end">
+                  <button onClick={restaurarPlantillas} className="px-4 py-2 rounded-full text-sm text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Volver a los originales</button>
+                  <button onClick={guardarPlantillas} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Guardar</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-3">Para escribir ({seguimiento.pendientes.length})</p>
+          {cargando || cargandoRet ? (
+            <p className="text-sm text-[#8A8378] mb-6">Cargando…</p>
+          ) : seguimiento.pendientes.length === 0 ? (
+            <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 px-5 py-6 mb-6 text-center">
+              <p className="text-sm text-[#221F1B]">No hay mensajes pendientes por ahora.</p>
+              <p className="text-xs text-[#8A8378] mt-1">Cuando un alumno nuevo cumpla {PASOS_SEGUIMIENTO.map(p => p.dias).join(' o ')} días, va a aparecer acá.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4 mb-6">
+              {seguimiento.pendientes.map(item => {
+                const k = `${item.alumno.id}|${item.paso.clave}`
+                return (
+                  <div key={k} className="bg-white rounded-2xl border border-[#221F1B]/10 p-5">
+                    <div className="flex items-start justify-between gap-3 flex-wrap mb-2">
+                      <div>
+                        <p className="text-base font-medium text-[#221F1B]">{nombreCompleto(item.alumno.nombre)}</p>
+                        <p className="text-xs text-[#8A8378] mt-0.5">Empezó el {formatoFechaCorta(item.alta)} · hace {item.dias} días</p>
+                        {resumenClases(item.alumno) && <p className="text-xs text-[#8A8378] mt-0.5">{resumenClases(item.alumno)}</p>}
+                      </div>
+                      <span className="text-xs px-3 py-1 rounded-full bg-[#EAF0EA] text-[#5C6F5D] font-medium">{item.paso.titulo}</span>
+                    </div>
+                    <textarea
+                      value={mensajeDe(item.alumno, item.paso.clave)}
+                      onChange={e => setMensajesEdit({ ...mensajesEdit, [k]: e.target.value })}
+                      rows={5}
+                      className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D] bg-[#FBF9F5]"
+                    />
+                    <div className="flex gap-3 justify-end mt-3 flex-wrap">
+                      {mensajesEdit[k] !== undefined && (
+                        <button onClick={() => { const n = { ...mensajesEdit }; delete n[k]; setMensajesEdit(n) }} className="px-3 py-2 rounded-full text-xs text-[#8A8378] hover:underline">Volver al sugerido</button>
+                      )}
+                      <button onClick={() => copiarMensaje(item.alumno, item.paso.clave)} className="px-4 py-2 rounded-full text-sm text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">
+                        {copiadoKey === k ? 'Copiado' : 'Copiar mensaje'}
+                      </button>
+                      <button onClick={() => marcarEnviado(item.alumno, item.paso.clave)} disabled={guardandoSeg === k} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D] disabled:opacity-50">
+                        {guardandoSeg === k ? 'Guardando…' : 'Marcar como enviado'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {seguimiento.proximos.length > 0 && (
+            <>
+              <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-3">Próximos {ADELANTO_DIAS} días</p>
+              <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 divide-y divide-[#221F1B]/8 mb-6">
+                {seguimiento.proximos.map(item => (
+                  <div key={`${item.alumno.id}|${item.paso.clave}`} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <p className="text-sm text-[#221F1B]">{nombreCompleto(item.alumno.nombre)}</p>
+                    <p className="text-xs text-[#8A8378]">{item.paso.titulo} · {item.faltan === 1 ? 'mañana' : `en ${item.faltan} días`}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {seguimiento.enviados.length > 0 && (
+            <>
+              <p className="text-xs text-[#8A8378] uppercase tracking-widest mb-3">Enviados en los últimos 30 días</p>
+              <div className="bg-[#FBF9F5] rounded-xl border border-[#221F1B]/8 divide-y divide-[#221F1B]/8 mb-6">
+                {seguimiento.enviados.map(x => (
+                  <div key={`${x.reg.alumno_id}|${x.reg.paso}`} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <p className="text-sm text-[#221F1B]">{nombreCompleto(x.alumno.nombre)}</p>
+                    <div className="flex items-center gap-4">
+                      <p className="text-xs text-[#8A8378]">{x.paso.titulo} · {formatoFechaCorta(x.reg.enviado_en)}</p>
+                      <button onClick={() => deshacerEnviado(x.alumno, x.paso.clave)} className="text-xs text-[#B5504A] hover:underline">Deshacer</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {tab === 'bajas' && (
