@@ -74,7 +74,7 @@ const PASOS_SEGUIMIENTO = [
 ]
 // Solo se hace seguimiento a alumnos que arrancaron por primera vez desde esta fecha (primer día del mes).
 // Para sumar más alumnos viejos, poné una fecha anterior.
-const INICIO_SEGUIMIENTO = '2026-10-01'
+const INICIO_SEGUIMIENTO = '2026-09-01'
 // Cuántos días antes se muestran en "Próximos".
 const ADELANTO_DIAS = 7
 
