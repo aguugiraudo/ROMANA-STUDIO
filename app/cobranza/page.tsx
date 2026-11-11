@@ -38,10 +38,10 @@ export default function Cobranza() {
   const [cuotasValores, setCuotasValores] = useState({})
   const [cuentas, setCuentas] = useState([])
   const [pagoModal, setPagoModal] = useState(null)
-  const [montoForm, setMontoForm] = useState('')
+  const [lineasPago, setLineasPago] = useState([{ forma: 'Efectivo', monto: '', cuenta_id: null }])
+  const [autoResto, setAutoResto] = useState(false)
+  const [guardando, setGuardando] = useState(false)
   const [montoEsperadoForm, setMontoEsperadoForm] = useState('')
-  const [formaForm, setFormaForm] = useState('Efectivo')
-  const [cuentaForm, setCuentaForm] = useState(null)
   const [diaPagoForm, setDiaPagoForm] = useState(hoyISO())
   const [cuotasModal, setCuotasModal] = useState(false)
   const [cuotasEdit, setCuotasEdit] = useState({})
@@ -123,20 +123,30 @@ export default function Cobranza() {
 
   const fechaVencimiento = `${mes.slice(0, 8)}10`
 
+  // Un alumno puede tener varias filas de cobranza en el mes (pago dividido: una en efectivo y otra por transferencia)
+  function cobranzasDe(alumnoId) { return cobranzas.filter(c => c.alumno_id === alumnoId) }
   function cobranzaDe(alumnoId) { return cobranzas.find(c => c.alumno_id === alumnoId) }
-  function estaPagado(alumnoId) {
-    const c = cobranzaDe(alumnoId)
-    return !!(c && Number(c.monto) > 0)
+  function totalPagadoDe(alumnoId) { return cobranzasDe(alumnoId).reduce((acc, c) => acc + (Number(c.monto) || 0), 0) }
+  function estaPagado(alumnoId) { return totalPagadoDe(alumnoId) > 0 }
+  function formasDe(alumnoId) {
+    const f = []
+    cobranzasDe(alumnoId).forEach(c => { if (Number(c.monto) > 0 && c.forma_pago && !f.includes(c.forma_pago)) f.push(c.forma_pago) })
+    return f.length ? f.join(' + ') : '—'
+  }
+  function cuentasDe(alumnoId) {
+    const n = []
+    cobranzasDe(alumnoId).forEach(c => { if (Number(c.monto) > 0 && c.cuentas?.nombre && !n.includes(c.cuentas.nombre)) n.push(c.cuentas.nombre) })
+    return n.length ? n.join(' + ') : '—'
   }
   function estadoDe(alumno) {
     if (alumno.exento_pago) return 'exento'
-    if (estaPagado(alumno.id)) return 'pagado'
+    if (estaPagado(alumno.id)) return totalPagadoDe(alumno.id) < cuotaEsperada(alumno) ? 'parcial' : 'pagado'
     return hoyISO() > fechaVencimiento ? 'vencido' : 'pendiente'
   }
   function cuotaBase(clasesReales) { return cuotasValores[clasesReales] ?? 0 }
   function cuotaEsperada(alumno) {
-    const c = cobranzaDe(alumno.id)
-    if (c && c.monto_esperado !== null && c.monto_esperado !== undefined) return Number(c.monto_esperado)
+    const c = cobranzasDe(alumno.id).find(x => x.monto_esperado !== null && x.monto_esperado !== undefined)
+    if (c) return Number(c.monto_esperado)
     return cuotaBase(alumno.clasesReales)
   }
 
@@ -161,43 +171,116 @@ export default function Cobranza() {
   })
 
   function abrirPago(alumno) {
-    const existente = cobranzaDe(alumno.id)
+    const filas = cobranzasDe(alumno.id)
+    const existente = filas.length > 0 ? filas : null
+    const esperado = cuotaEsperada(alumno)
     setPagoModal({ alumno, existente })
-    setMontoForm(existente && existente.monto ? String(existente.monto) : '')
-    setMontoEsperadoForm(String(cuotaEsperada(alumno)))
-    setFormaForm(existente?.forma_pago || 'Efectivo')
-    setCuentaForm(existente?.cuenta_id || null)
-    setDiaPagoForm(existente?.dia_pago || hoyISO())
+    setMontoEsperadoForm(String(esperado))
+    const conMonto = filas.filter(f => Number(f.monto) > 0)
+    if (conMonto.length > 0) {
+      setLineasPago(conMonto.map(f => ({ forma: f.forma_pago || 'Efectivo', monto: String(f.monto), cuenta_id: f.cuenta_id || null })))
+      setDiaPagoForm(conMonto[0].dia_pago || hoyISO())
+    } else {
+      // Sin pago cargado todavía: el monto sale ya completado con la cuota proyectada
+      setLineasPago([{ forma: 'Efectivo', monto: esperado > 0 ? String(esperado) : '', cuenta_id: null }])
+      setDiaPagoForm(hoyISO())
+    }
+    setAutoResto(false)
   }
 
+  function cambiarEsperado(v) {
+    // Si todavía no hay pago cargado y el monto es el que venía por defecto, lo acompaña
+    if (pagoModal && !pagoModal.existente && lineasPago.length === 1 && lineasPago[0].monto === montoEsperadoForm) {
+      setLineasPago([{ ...lineasPago[0], monto: v }])
+    }
+    setMontoEsperadoForm(v)
+  }
+
+  function actualizarLinea(i, cambios) {
+    const nuevas = lineasPago.map((l, idx) => idx === i ? { ...l, ...cambios } : l)
+    // En pago dividido, si se cambia el monto de la primera línea, la segunda se completa sola con lo que falta
+    if ('monto' in cambios && nuevas.length === 2 && autoResto && i === 0) {
+      const esperado = parseFloat(montoEsperadoForm) || 0
+      const resto = Math.max(esperado - (parseFloat(cambios.monto) || 0), 0)
+      nuevas[1] = { ...nuevas[1], monto: resto > 0 ? String(resto) : '' }
+    }
+    if ('monto' in cambios && i === 1) setAutoResto(false)
+    setLineasPago(nuevas)
+  }
+
+  function dividirPago() {
+    const esperado = parseFloat(montoEsperadoForm) || 0
+    const primera = lineasPago[0]
+    const montoPrimera = parseFloat(primera.monto) || 0
+    const otra = primera.forma === 'Efectivo' ? 'Transferencia' : 'Efectivo'
+    if (montoPrimera > 0 && montoPrimera < esperado) {
+      // Ya hay una parte cargada (pago parcial): se mantiene y la otra línea queda con lo que falta
+      setLineasPago([primera, { forma: otra, monto: String(esperado - montoPrimera), cuenta_id: null }])
+      setAutoResto(true)
+      return
+    }
+    const mitad = Math.round(esperado / 2)
+    setLineasPago([
+      { ...primera, monto: esperado > 0 ? String(mitad) : primera.monto },
+      { forma: otra, monto: esperado > 0 ? String(esperado - mitad) : '', cuenta_id: null }
+    ])
+    setAutoResto(true)
+  }
+
+  function quitarLinea(i) {
+    setLineasPago(lineasPago.filter((_, idx) => idx !== i))
+    setAutoResto(false)
+  }
+
+  const totalLineas = lineasPago.reduce((acc, l) => acc + (parseFloat(l.monto) || 0), 0)
+  const esperadoNum = parseFloat(montoEsperadoForm) || 0
+  const diferenciaPago = totalLineas - esperadoNum
+
   async function guardarPago() {
-    if (!pagoModal) return
-    const montoPagado = parseFloat(montoForm) || 0
-    if (montoPagado > 0 && formaForm === 'Transferencia' && !cuentaForm) {
+    if (!pagoModal || guardando) return
+    const validas = lineasPago.filter(l => (parseFloat(l.monto) || 0) > 0)
+    if (validas.some(l => l.forma === 'Transferencia' && !l.cuenta_id)) {
       alert('Elegí a qué cuenta corresponde la transferencia antes de guardar')
       return
     }
-    const payload = {
-      alumno_id: pagoModal.alumno.id,
-      mes,
-      monto: montoPagado,
-      monto_esperado: montoEsperadoForm === '' ? null : parseFloat(montoEsperadoForm),
-      forma_pago: montoPagado > 0 ? formaForm : null,
-      cuenta_id: montoPagado > 0 && formaForm === 'Transferencia' ? cuentaForm : null,
-      dia_pago: montoPagado > 0 ? diaPagoForm : null
-    }
-    if (pagoModal.existente) {
-      await supabase.from('cobranzas').update(payload).eq('id', pagoModal.existente.id)
+    setGuardando(true)
+    const esperado = montoEsperadoForm === '' ? null : parseFloat(montoEsperadoForm)
+    const dia = diaPagoForm || hoyISO()
+    let filasNuevas
+    if (validas.length === 0) {
+      filasNuevas = [{ alumno_id: pagoModal.alumno.id, mes, monto: 0, monto_esperado: esperado, forma_pago: null, cuenta_id: null, dia_pago: null }]
     } else {
-      await supabase.from('cobranzas').insert(payload)
+      filasNuevas = validas.map((l, idx) => ({
+        alumno_id: pagoModal.alumno.id,
+        mes,
+        monto: parseFloat(l.monto),
+        // la proyección se guarda una sola vez (en la primera fila) para no duplicarla
+        monto_esperado: idx === 0 ? esperado : null,
+        forma_pago: l.forma,
+        cuenta_id: l.forma === 'Transferencia' ? l.cuenta_id : null,
+        dia_pago: dia
+      }))
     }
+    // Primero se guardan los nuevos y recién después se borran los viejos, así nunca se pierde un pago si algo falla
+    const { error } = await supabase.from('cobranzas').insert(filasNuevas)
+    if (error) {
+      setGuardando(false)
+      alert('No se pudo guardar el pago: ' + error.message + '\n\nSi el mensaje habla de "duplicate key" o "unique", falta correr el SQL de pagos divididos en Supabase.')
+      return
+    }
+    if (pagoModal.existente && pagoModal.existente.length > 0) {
+      const ids = pagoModal.existente.map(f => f.id)
+      await supabase.from('cobranzas').delete().in('id', ids)
+    }
+    setGuardando(false)
     setPagoModal(null)
     cargar()
   }
 
   async function borrarPago() {
     if (!pagoModal?.existente) return
-    await supabase.from('cobranzas').delete().eq('id', pagoModal.existente.id)
+    const ids = pagoModal.existente.map(f => f.id)
+    await supabase.from('cobranzas').delete().in('id', ids)
     setPagoModal(null)
     cargar()
   }
@@ -285,12 +368,14 @@ export default function Cobranza() {
 
   const chipEstado = {
     pagado: 'bg-[#5C6F5D] text-white',
+    parcial: 'bg-[#D9B77A] text-[#221F1B]',
     pendiente: 'bg-[#EDE7DD] text-[#8A6B2C]',
     vencido: 'bg-[#B5504A] text-white',
     exento: 'bg-[#E3E3DE] text-[#8A8378]'
   }
-  const labelEstado = { pagado: 'Pagado', pendiente: 'Pendiente', vencido: 'Vencido', exento: 'Exento' }
-  const contadorFiltro = { pagado: 0, pendiente: 0, vencido: 0, exento: 0 }
+  const labelEstado = { pagado: 'Pagado', parcial: 'Parcial', pendiente: 'Pendiente', vencido: 'Vencido', exento: 'Exento' }
+  const labelPlural = { pagado: 'Pagados', parcial: 'Parciales', pendiente: 'Pendientes', vencido: 'Vencidos', exento: 'Exentos' }
+  const contadorFiltro = { pagado: 0, parcial: 0, pendiente: 0, vencido: 0, exento: 0 }
   alumnosDelMes.forEach(a => { contadorFiltro[estadoDe(a)] = (contadorFiltro[estadoDe(a)] || 0) + 1 })
 
   if (!rol) return null
@@ -364,9 +449,9 @@ export default function Cobranza() {
 
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap">
-          {['todos', 'pagado', 'pendiente', 'vencido', 'exento'].map(f => (
+          {['todos', 'pagado', 'parcial', 'pendiente', 'vencido', 'exento'].map(f => (
             <button key={f} onClick={() => setFiltro(f)} className={`px-4 py-1.5 rounded-full text-sm border ${filtro === f ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15 hover:border-[#5C6F5D]'}`}>
-              {f === 'todos' ? `Todos (${alumnosDelMes.length})` : `${labelEstado[f]}s (${contadorFiltro[f] || 0})`}
+              {f === 'todos' ? `Todos (${alumnosDelMes.length})` : `${labelPlural[f]} (${contadorFiltro[f] || 0})`}
             </button>
           ))}
         </div>
@@ -398,6 +483,7 @@ export default function Cobranza() {
             <tbody>
               {alumnosFiltrados.map(a => {
                 const c = cobranzaDe(a.id)
+                const pagadoTotal = totalPagadoDe(a.id)
                 const estado = estadoDe(a)
                 const puedeMensaje = estado === 'pendiente' || estado === 'vencido'
                 return (
@@ -412,7 +498,7 @@ export default function Cobranza() {
                       {a.exento_pago ? '—' : `$${cuotaEsperada(a).toLocaleString('es-AR')}`}
                     </td>
                     <td className="px-4 py-3 text-sm text-center text-[#221F1B]">
-                      {c?.monto ? `$${Number(c.monto).toLocaleString('es-AR')}` : '—'}
+                      {pagadoTotal > 0 ? `$${pagadoTotal.toLocaleString('es-AR')}` : '—'}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {puedeMensaje ? (
@@ -425,8 +511,8 @@ export default function Cobranza() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{c?.forma_pago || '—'}</td>
-                    <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{c?.cuentas?.nombre || '—'}</td>
+                    <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{formasDe(a.id)}</td>
+                    <td className="px-4 py-3 text-sm text-center text-[#221F1B]">{cuentasDe(a.id)}</td>
                     <td className="px-4 py-3 text-center">
                       {!a.exento_pago && (
                         <button onClick={() => abrirPago(a)} className="text-xs text-[#5C6F5D] hover:underline">
@@ -505,42 +591,69 @@ export default function Cobranza() {
       )}
 
       {pagoModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4" onClick={() => setPagoModal(null)}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center px-4 py-6" onClick={() => setPagoModal(null)}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm max-h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-medium text-[#221F1B] mb-1">{pagoModal.alumno.nombre}</p>
             <p className="text-xs text-[#8A8378] mb-4">{labelMes} · {pagoModal.alumno.clasesReales} clases/semana</p>
 
             <label className="block text-xs text-[#8A8378] mb-1">Proyección para este alumno este mes</label>
-            <input type="number" value={montoEsperadoForm} onChange={e => setMontoEsperadoForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-1 outline-none focus:border-[#5C6F5D]" />
-            <p className="text-[11px] text-[#8A8378] mb-3">Ajustala si entró a mitad de mes, paga distinto, o cualquier caso especial — así el proyectado no miente.</p>
+            <input type="number" value={montoEsperadoForm} onChange={e => cambiarEsperado(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-1 outline-none focus:border-[#5C6F5D]" />
+            <p className="text-[11px] text-[#8A8378] mb-4">Sale con el valor de la cuota según sus clases por semana. Ajustala si entró a mitad de mes, paga distinto, o cualquier caso especial — así el proyectado no miente.</p>
 
-            <label className="block text-xs text-[#8A8378] mb-1">Monto pagado (dejalo vacío si todavía no pagó)</label>
-            <input type="number" value={montoForm} onChange={e => setMontoForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:border-[#5C6F5D]" />
-
-            <label className="block text-xs text-[#8A8378] mb-1">Forma de pago</label>
-            <div className="flex gap-2 mb-3">
-              {['Efectivo', 'Transferencia'].map(f => (
-                <button key={f} onClick={() => setFormaForm(f)} className={`px-4 py-1.5 rounded-full text-sm border ${formaForm === f ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
-                  {f}
-                </button>
+            <label className="block text-xs text-[#8A8378] mb-2">{lineasPago.length > 1 ? 'Pago dividido' : 'Pago'} (dejá el monto vacío si todavía no pagó)</label>
+            <div className="flex flex-col gap-3 mb-3">
+              {lineasPago.map((l, i) => (
+                <div key={i} className="bg-[#F5F1E9] rounded-xl p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex gap-2">
+                      {['Efectivo', 'Transferencia'].map(f => (
+                        <button key={f} onClick={() => actualizarLinea(i, { forma: f })} className={`px-3 py-1 rounded-full text-xs border ${l.forma === f ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    {lineasPago.length > 1 && (
+                      <button onClick={() => quitarLinea(i)} className="text-xs text-[#B5504A] hover:underline">Quitar</button>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    value={l.monto}
+                    onChange={e => actualizarLinea(i, { monto: e.target.value })}
+                    placeholder="Monto"
+                    className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm outline-none focus:border-[#5C6F5D] bg-white"
+                  />
+                  {l.forma === 'Transferencia' && (
+                    <div className="mt-2">
+                      <label className="block text-xs text-[#8A8378] mb-1">Cuenta destino <span className="text-[#B5504A]">*</span></label>
+                      <div className="flex gap-2 flex-wrap">
+                        {cuentas.map(ct => (
+                          <button key={ct.id} onClick={() => actualizarLinea(i, { cuenta_id: ct.id })} className={`px-3 py-1 rounded-full text-xs border ${l.cuenta_id === ct.id ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
+                            {ct.nombre}
+                          </button>
+                        ))}
+                      </div>
+                      {!l.cuenta_id && (parseFloat(l.monto) || 0) > 0 && <p className="text-[11px] text-[#B5504A] mt-1">Obligatorio para transferencias</p>}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
 
-            {formaForm === 'Transferencia' && (
-              <>
-                <label className="block text-xs text-[#8A8378] mb-1">Cuenta destino <span className="text-[#B5504A]">*</span></label>
-                <div className="flex gap-2 mb-1 flex-wrap">
-                  {cuentas.map(ct => (
-                    <button key={ct.id} onClick={() => setCuentaForm(ct.id)} className={`px-4 py-1.5 rounded-full text-sm border ${cuentaForm === ct.id ? 'bg-[#5C6F5D] text-white border-[#5C6F5D]' : 'bg-white text-[#221F1B] border-[#221F1B]/15'}`}>
-                      {ct.nombre}
-                    </button>
-                  ))}
-                </div>
-                {!cuentaForm && <p className="text-[11px] text-[#B5504A] mb-3">Obligatorio para transferencias</p>}
-              </>
+            {lineasPago.length === 1 && (
+              <button onClick={dividirPago} className="text-xs text-[#5C6F5D] hover:underline mb-3">
+                + Agregar otra forma de pago (efectivo + transferencia)
+              </button>
             )}
 
-            <label className="block text-xs text-[#8A8378] mb-1 mt-3">Día de pago</label>
+            {totalLineas > 0 && (
+              <p className={`text-xs mb-3 ${diferenciaPago === 0 ? 'text-[#5C6F5D]' : 'text-[#8A6B2C]'}`}>
+                Total: ${totalLineas.toLocaleString('es-AR')}
+                {diferenciaPago === 0 ? ' · coincide con la proyección' : diferenciaPago < 0 ? ` · faltan $${Math.abs(diferenciaPago).toLocaleString('es-AR')} respecto de la proyección` : ` · $${diferenciaPago.toLocaleString('es-AR')} más que la proyección`}
+              </p>
+            )}
+
+            <label className="block text-xs text-[#8A8378] mb-1">Día de pago</label>
             <input type="date" value={diaPagoForm} onChange={e => setDiaPagoForm(e.target.value)} className="w-full border border-[#221F1B]/15 rounded-lg px-3 py-2 text-sm mb-5 outline-none focus:border-[#5C6F5D]" />
 
             <div className="flex gap-3 justify-between items-center">
@@ -549,7 +662,7 @@ export default function Cobranza() {
               ) : <span />}
               <div className="flex gap-3">
                 <button onClick={() => setPagoModal(null)} className="px-4 py-2 rounded-full text-sm font-medium text-[#221F1B] border border-[#221F1B]/15 hover:bg-[#F5F1E9]">Cancelar</button>
-                <button onClick={guardarPago} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D]">Guardar</button>
+                <button onClick={guardarPago} disabled={guardando} className="px-4 py-2 rounded-full text-sm font-medium text-white bg-[#5C6F5D] hover:bg-[#4C5C4D] disabled:opacity-60">{guardando ? 'Guardando…' : 'Guardar'}</button>
               </div>
             </div>
           </div>
